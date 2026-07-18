@@ -141,8 +141,9 @@ pub fn updates_page(path: Signal<Vec<Nav>>) -> AnyPiece {
             );
         }
     })
-    .grow()
-    .id("updates-list");
+    // id BEFORE grow so it lands on the list node (with the selection handler), not the wrapper.
+    .id("updates-list")
+    .grow();
 
     column((header, list))
         .spacing(10.0)

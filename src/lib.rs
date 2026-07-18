@@ -15,6 +15,7 @@ mod fdroid;
 mod icons;
 mod install;
 mod install_sheet;
+mod mock;
 mod model;
 mod net;
 mod platform;
@@ -120,10 +121,16 @@ pub fn root() -> AnyPiece {
     // result never arrived). Safe now — no install is in flight. Runs off-thread; `data_dir` is
     // already cached above, so it needs no JNI.
     std::thread::spawn(install::prune_stale_apks);
-    // Check every enabled catalog for updates after first paint.
-    day_reactive::on_main(sync::sync_all_enabled);
-    // Register the daily background update check (idempotent; keeps any existing schedule) (#7).
-    platform::schedule_update_checks();
+    if mock::enabled() {
+        // Offline, deterministic mode (local testing + CI screenshots): seed the bundled catalog
+        // instead of syncing from the network, and skip background update checks.
+        day_reactive::on_main(mock::seed);
+    } else {
+        // Check every enabled catalog for updates after first paint.
+        day_reactive::on_main(sync::sync_all_enabled);
+        // Register the daily background update check (idempotent; keeps any existing schedule) (#7).
+        platform::schedule_update_checks();
+    }
 
     let tab = Signal::new(Tab::Catalogs);
     let catalog_path = Signal::new(Vec::<Nav>::new());

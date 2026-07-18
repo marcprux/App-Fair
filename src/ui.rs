@@ -77,8 +77,10 @@ pub fn catalogs_page(path: Signal<Vec<Nav>>) -> AnyPiece {
             );
         }
     })
-    .grow()
-    .id("app-list");
+    // id BEFORE grow so it lands on the list node (which carries the selection handler), not the
+    // grow wrapper — otherwise a scripted `select` can't reach the list.
+    .id("app-list")
+    .grow();
 
     column((header, search, category_region.any(), sync_line, list))
         .spacing(10.0)

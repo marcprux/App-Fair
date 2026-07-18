@@ -117,6 +117,16 @@ fn load(url: &str, setter: Setter<Option<Arc<Vec<u8>>>>) {
     }
 }
 
+/// Write `bytes` into the on-disk cache under `url`, so a later request for that URL loads them
+/// straight from disk without touching the network. Used to pre-warm the mock catalog's icons.
+pub fn preseed(url: &str, bytes: &[u8]) {
+    let path = cache_path(url);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, bytes);
+}
+
 fn cache_path(url: &str) -> PathBuf {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     url.hash(&mut h);

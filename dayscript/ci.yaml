@@ -1,0 +1,62 @@
+# App Fair — a demonstrative walkthrough that produces the store's marketing screenshots
+# (https://daybrite.dev/docs/dayscript). It runs against the bundled MOCK CATALOG (a small,
+# tasteful subset of F-Droid), so it's fully offline and deterministic — no 50 MB index download.
+# CI runs it per target and per locale; run it locally with:
+#
+#     day launch -p android-widget --script dayscript/ci.yaml --env APP_FAIR_MOCK=1
+#
+# `pause` steps let a native push/tab transition finish before the shot (wait_idle settles the
+# reactive tree, not the animation). Rows are ordered by recency; the mock catalog's indices are
+# fixed: Organic Maps = 3, Wikipedia = 4.
+flow:
+  # The mock catalog seeds just after first paint; wait until a known app row is on screen so every
+  # shot is of a fully-populated store (identifiers are locale-independent, so en and fr match).
+  - wait_for: { id: tabs }
+  - wait_for: { id: "app-row:1~app.organicmaps" }
+  - wait_idle:
+  - pause: { secs: 0.5 }
+  - screenshot: 01-browse
+
+  # An app's detail page: real icon, description, permissions, the pinned signing key, and Install.
+  - select: { id: app-list, index: 3 }
+  - wait_for: { id: detail-install }
+  - wait_idle:
+  - pause: { secs: 0.9 }
+  - screenshot: 02-detail
+  - nav_back:
+  - wait_idle:
+
+  # Browse by category — the picker filters the list to a single category.
+  - wait_for: { id: category-picker }
+  - select: { id: category-picker, index: 7 }
+  - wait_idle:
+  - pause: { secs: 0.7 }
+  - screenshot: 03-category
+  - select: { id: category-picker, index: 0 }
+  - wait_idle:
+
+  # Settings: catalogs, launch/auto-download preferences, anti-feature filters, the privacy note.
+  - navigate: { route: settings }
+  - wait_for: { id: pref-sync }
+  - wait_idle:
+  - pause: { secs: 0.9 }
+  - screenshot: 04-settings
+
+  # A second detail — Wikipedia (index 4) — for variety in the gallery.
+  - navigate: { route: catalogs }
+  - wait_for: { id: app-list }
+  - pause: { secs: 0.6 }
+  - select: { id: app-list, index: 4 }
+  - wait_for: { id: detail-install }
+  - wait_idle:
+  - pause: { secs: 0.9 }
+  - screenshot: 05-wikipedia
+  - nav_back:
+  - wait_idle:
+
+  # Add a catalog: HTTPS-enforced URL entry plus a list of known repositories.
+  - tap: { id: catalog-add }
+  - wait_for: { id: catalog-confirm }
+  - wait_idle:
+  - pause: { secs: 0.9 }
+  - screenshot: 06-add-catalog

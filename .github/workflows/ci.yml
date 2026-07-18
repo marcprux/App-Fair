@@ -16,5 +16,8 @@ jobs:
     with:
       targets: android-widget
       day-version: main
-      scripts: dayscript/smoke.yaml
+      # The walkthrough runs against the bundled mock catalog (APP_FAIR_MOCK=1) so screenshots are
+      # deterministic and offline — no 50 MB F-Droid index download in CI.
+      scripts: dayscript/ci.yaml
+      launch-env: APP_FAIR_MOCK=1
       locales: en fr

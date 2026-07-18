@@ -228,11 +228,6 @@ fn repo_row(slot: ItemSlot<RepoRow, i64>) -> AnyPiece {
     let r = slot.get();
     let id = r.id;
     let address = r.address.clone();
-    let title = if r.name.is_empty() {
-        r.address.clone()
-    } else {
-        r.name.clone()
-    };
 
     let enabled = Signal::new(r.enabled);
     watch(
@@ -248,11 +243,25 @@ fn repo_row(slot: ItemSlot<RepoRow, i64>) -> AnyPiece {
 
     row((
         column((
-            label(title).font(Font::Body),
-            label(crate::res::str::repo_row_meta(
-                r.address.clone(),
-                r.app_count,
-            ))
+            // Read name/count reactively: the row is keyed by repo id, so `each` reuses it when a
+            // sync/seed fills in the repo's name and app count — a static read would stay stale.
+            label(move || {
+                slot.field(|r| {
+                    if r.name.is_empty() {
+                        r.address.clone()
+                    } else {
+                        r.name.clone()
+                    }
+                })
+            })
+            .font(Font::Body),
+            label(move || {
+                crate::res::str::repo_row_meta(
+                    slot.field(|r| r.address.clone()),
+                    slot.field(|r| r.app_count),
+                )
+                .format()
+            })
             .font(Font::Caption)
             .color(MUTED),
         ))
