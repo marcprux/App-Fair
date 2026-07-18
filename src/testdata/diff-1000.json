@@ -1,0 +1,32 @@
+{
+  "repo": { "timestamp": 2000 },
+  "packages": {
+    "com.example.alpha": {
+      "metadata": {
+        "description": { "en-US": "Alpha UPDATED", "fr": "Alpha MODIFIÉ" },
+        "lastUpdated": 200
+      }
+    },
+    "com.example.beta": null,
+    "com.example.gamma": {
+      "metadata": {
+        "name": { "en-US": "Gamma" },
+        "summary": { "en-US": "Gamma summary" },
+        "authorName": "Carol",
+        "license": "Apache-2.0",
+        "categories": ["Internet"],
+        "lastUpdated": 150
+      },
+      "versions": {
+        "v1": {
+          "file": { "name": "/gamma_1.apk", "size": 333 },
+          "manifest": {
+            "versionName": "3.0",
+            "versionCode": 3,
+            "usesSdk": { "minSdkVersion": 26 }
+          }
+        }
+      }
+    }
+  }
+}

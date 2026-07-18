@@ -1,0 +1,72 @@
+{
+  "repo": {
+    "name": { "en-US": "Test Repo", "fr": "Dépôt de test" },
+    "timestamp": 1000,
+    "mirrors": [
+      { "url": "https://mirror1.example/repo" },
+      { "url": "https://mirror2.example/repo/" }
+    ],
+    "categories": {
+      "Internet": { "name": { "en-US": "Internet", "fr": "Internet" } },
+      "System": { "name": { "en-US": "System" } }
+    },
+    "antiFeatures": {
+      "Tracking": {
+        "name": { "en-US": "Tracking", "fr": "Pistage" },
+        "description": { "en-US": "Tracks you.", "fr": "Vous piste." }
+      }
+    }
+  },
+  "packages": {
+    "com.example.alpha": {
+      "metadata": {
+        "name": { "en-US": "Alpha", "fr": "Alpha FR" },
+        "summary": { "en-US": "Alpha summary", "fr": "Résumé Alpha" },
+        "description": { "en-US": "Alpha description", "fr": "Description Alpha" },
+        "authorName": "Alice",
+        "authorWebSite": "https://alice.example",
+        "webSite": "https://alpha.example",
+        "sourceCode": "https://src.example/alpha",
+        "license": "GPL-3.0-only",
+        "categories": ["Internet"],
+        "icon": { "en-US": { "name": "/icons/alpha.png" } },
+        "lastUpdated": 100,
+        "screenshots": { "phone": { "en-US": [{ "name": "/ss/alpha1.png" }] } }
+      },
+      "versions": {
+        "v1": {
+          "file": { "name": "/alpha_1.apk", "sha256": "a1a1", "size": 111 },
+          "manifest": {
+            "versionName": "1.0",
+            "versionCode": 1,
+            "usesSdk": { "minSdkVersion": 21 },
+            "usesPermission": [["android.permission.INTERNET", null]],
+            "signer": { "sha256": ["deadbeefcafe0001"] }
+          },
+          "antiFeatures": { "Tracking": {} },
+          "whatsNew": { "en-US": "First release" }
+        }
+      }
+    },
+    "com.example.beta": {
+      "metadata": {
+        "name": { "en-US": "Beta" },
+        "summary": { "en-US": "Beta summary" },
+        "authorName": "Bob",
+        "license": "MIT",
+        "categories": ["System"],
+        "lastUpdated": 90
+      },
+      "versions": {
+        "v1": {
+          "file": { "name": "/beta_1.apk", "size": 222 },
+          "manifest": {
+            "versionName": "2.0",
+            "versionCode": 2,
+            "usesSdk": { "minSdkVersion": 24 }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "timestamp": 2000,
+  "version": 20002,
+  "index": { "name": "/index-v2.json", "sha256": "", "size": 0 },
+  "diffs": {
+    "1000": { "name": "/diff/1000.json", "sha256": "", "size": 0 }
+  }
+}

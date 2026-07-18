@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App Fair's friendly-blue brand palette (Material 3 primary roles). Overrides the M3
+         baseline purple so buttons, tabs, and switches read blue. -->
+    <color name="af_primary">#2F6FDE</color>
+    <color name="af_on_primary">#FFFFFF</color>
+    <color name="af_primary_container">#D7E3FF</color>
+    <color name="af_on_primary_container">#001B3F</color>
+    <color name="af_secondary">#3F5F8A</color>
+    <color name="af_on_secondary">#FFFFFF</color>
+    <color name="af_secondary_container">#D6E3FF</color>
+    <color name="af_on_secondary_container">#0E2138</color>
+</resources>

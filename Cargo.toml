@@ -1,0 +1,75 @@
+[package]
+name = "app-fair"
+version = "0.1.0"
+edition = "2024"
+# Generates typed resource constants (`res::images::…`, `res::str::…`) from `resource/` on build.
+build = "build.rs"
+
+[features]
+# `mock` lets bare `cargo build` / rust-analyzer compile out of the box; `day build` always passes
+# `--no-default-features --features <backend>`, stripping it.
+default = ["mock"]
+appkit = ["day/appkit"]
+gtk = ["day/gtk"]
+qt = ["day/qt"]
+uikit = ["day/uikit"]
+widget = ["day/widget"]
+winui = ["day/winui"]
+arkui = ["day/arkui"]
+mock = ["day/mock"]
+
+# rlib for the desktop bin; the mobile pipeline requests the iOS staticlib / Android cdylib via
+# `cargo rustc --crate-type`.
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+day = { git = "https://github.com/daybrite/day.git" }
+# on_main: marshal JNI calls that need the app classloader back onto the UI thread.
+day-reactive = { git = "https://github.com/daybrite/day.git" }
+# Icons + screenshots: decode fetched PNG/JPEG bytes natively (day build unions its per-backend
+# renderer features).
+day-piece-remote-image = { git = "https://github.com/daybrite/day.git" }
+# Persistent settings (added repositories, last-sync bookkeeping).
+day-part-prefs = { git = "https://github.com/daybrite/day.git" }
+# Native search control for the browse page.
+day-piece-searchfield = { git = "https://github.com/daybrite/day.git" }
+# Native dropdown for the category filter.
+day-piece-picker = { git = "https://github.com/daybrite/day.git" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# On-device catalog. Diesel is the query/schema layer; libsqlite3-sys `bundled` compiles SQLite in
+# so there is one code path on Android and iOS with no platform DB. `diesel_migrations` embeds the
+# versioned schema migrations run at open().
+# `32-column-tables`: the `apps` table has 23 columns (Diesel defaults to 16).
+diesel = { version = "2.2", features = ["sqlite", "32-column-tables"] }
+diesel_migrations = "2.2"
+libsqlite3-sys = { version = "0.30.1", features = ["bundled"] }
+# Live HTTPS on every target we ship (desktop/iOS/Android): ureq's default rustls + `ring` backend.
+ureq = "3"
+# Verify a downloaded APK against the catalog's SHA-256 before handing it to the installer.
+sha2 = "0.10"
+
+# Reach the app's JVM + Context on Android (with_env / dcall_static) for the install bridge.
+[target.'cfg(target_os = "android")'.dependencies]
+day-android = { git = "https://github.com/daybrite/day.git" }
+# Lower background-thread OS priority so the first sync never starves the UI thread.
+libc = "0.2"
+
+# App Fair's own Android install bridge (PackageInstaller). Staged into the Gradle build like a
+# piece's native half, but it registers no renderer — the Rust cdylib exports the JNI callback.
+[package.metadata.day.android]
+java = ["android/java"]
+# Periodic background update checks (#7) run in a WorkManager worker; the notification they post
+# needs POST_NOTIFICATIONS on Android 13+ (INTERNET comes from the toolkit).
+gradle-dependencies = ["androidx.work:work-runtime:2.9.1"]
+permissions = ["android.permission.POST_NOTIFICATIONS"]
+
+[build-dependencies]
+day-build = { git = "https://github.com/daybrite/day.git" }
+
+[[bin]]
+name = "app-fair"
+path = "src/main.rs"
+
+[workspace]

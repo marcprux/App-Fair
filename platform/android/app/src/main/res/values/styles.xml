@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App theme: Material 3 Expressive, follows the system light/dark setting (DayNight), no
+         framework ActionBar (Day renders its own nav/toolbar chrome). App Fair overrides the M3
+         baseline primary/secondary roles with its friendly-blue brand palette. -->
+    <style name="AppTheme" parent="Theme.Material3Expressive.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/af_primary</item>
+        <item name="colorOnPrimary">@color/af_on_primary</item>
+        <item name="colorPrimaryContainer">@color/af_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/af_on_primary_container</item>
+        <item name="colorSecondary">@color/af_secondary</item>
+        <item name="colorOnSecondary">@color/af_on_secondary</item>
+        <item name="colorSecondaryContainer">@color/af_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/af_on_secondary_container</item>
+    </style>
+</resources>
