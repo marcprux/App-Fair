@@ -31,7 +31,7 @@ public final class DayInstaller {
     /** Terminal + pending status codes, forwarded to Rust. Mirror PackageInstaller's values. */
     static native void nativeInstallResult(int status, String message);
 
-    private static final String ACTION = "dev.daybrite.appfair.INSTALL_STATUS";
+    private static final String ACTION = "org.appfair.INSTALL_STATUS";
     private static boolean receiverRegistered = false;
 
     /** The app-private files directory — where the Rust side keeps its SQLite catalog. */

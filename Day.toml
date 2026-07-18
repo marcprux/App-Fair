@@ -6,7 +6,7 @@
 schema = 1
 
 [app]
-id = "dev.daybrite.appfair"
+id = "org.appfair.AppFair"
 title = "App Fair"
 build = 1
 targets = ["android-widget", "ios-uikit"]

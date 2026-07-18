@@ -64,6 +64,9 @@ java = ["android/java"]
 # needs POST_NOTIFICATIONS on Android 13+ (INTERNET comes from the toolkit).
 gradle-dependencies = ["androidx.work:work-runtime:2.9.1"]
 permissions = ["android.permission.POST_NOTIFICATIONS"]
+# R8/ProGuard keep rules for the Java classes Rust reaches by name (DayInstaller, UpdateWorker), so
+# release minification doesn't rename them out from under JNI. day-build aggregates these.
+proguard = ["android/proguard-rules.pro"]
 
 [build-dependencies]
 day-build = { git = "https://github.com/daybrite/day.git" }

@@ -191,7 +191,7 @@
 				LIBRARY_SEARCH_PATHS = "$(BUILT_PRODUCTS_DIR)/day";
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = "-lApp_Fair";
-				PRODUCT_BUNDLE_IDENTIFIER = dev.daybrite.appfair;
+				PRODUCT_BUNDLE_IDENTIFIER = org.appfair.AppFair;
 				PRODUCT_NAME = AppFair;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -209,7 +209,7 @@
 				LIBRARY_SEARCH_PATHS = "$(BUILT_PRODUCTS_DIR)/day";
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = "-lApp_Fair";
-				PRODUCT_BUNDLE_IDENTIFIER = dev.daybrite.appfair;
+				PRODUCT_BUNDLE_IDENTIFIER = org.appfair.AppFair;
 				PRODUCT_NAME = AppFair;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
