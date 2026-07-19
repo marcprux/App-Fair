@@ -1,24 +1,25 @@
-//! HTTP downloads. Small fetches (`entry.json`, icons) read the whole body; a big download (an
-//! APK) streams in 64 KiB chunks into a caller-provided sink — a file for install, so a 500 MB
-//! APK never sits in memory — reporting progress, cancellable mid-flight, and hashing as it goes.
+//! HTTP downloads via `day-part-http` (the platform HTTP stack — system proxies, VPN, and TLS on
+//! macOS/iOS/Android/Windows; a bundled ureq+rustls fallback on Linux/OHOS). Small fetches
+//! (`entry.json`, icons) read the whole body; a big download (an APK) streams in chunks into a
+//! caller-provided sink — a file for install, so a 500 MB APK never sits in memory — reporting
+//! progress, cancellable mid-flight, and hashing as it goes.
 
 use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use day_part_http::{HttpError, Request, StreamSink};
 use sha2::{Digest, Sha256};
 
 /// Fetch a URL fully into memory. Used for `entry.json`, the index, and images.
 pub fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
-    let mut resp = ureq::get(url)
-        .call()
-        .map_err(|e| format!("request failed: {e}"))?;
-    let mut buf = Vec::new();
-    resp.body_mut()
-        .as_reader()
-        .read_to_end(&mut buf)
-        .map_err(|e| format!("read failed: {e}"))?;
-    Ok(buf)
+    let resp =
+        day_part_http::fetch(&Request::get(url)).map_err(|e| format!("request failed: {e}"))?;
+    // day-part-http hands 4xx/5xx back as responses; a miss must fail over to the next mirror.
+    if !(200..300).contains(&resp.status) {
+        return Err(format!("request failed: HTTP {}", resp.status));
+    }
+    Ok(resp.body)
 }
 
 /// Ordered download targets: the primary base first, then its mirrors — the failover list every
@@ -83,6 +84,59 @@ impl Progress {
     }
 }
 
+/// Case-insensitive response-header lookup over day-part-http's header list.
+fn header<'h>(headers: &'h [(String, String)], name: &str) -> Option<&'h str> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
+/// Parse a `u64` response header, e.g. `Content-Length`.
+fn header_u64(headers: &[(String, String)], name: &str) -> Option<u64> {
+    header(headers, name).and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+/// [`StreamSink`] that hashes and writes each chunk, tracks [`Progress`], and honors
+/// cancellation. App-level failures (non-2xx status, write error, cancellation) are recorded in
+/// `fail` — the transport error that aborts the stream is a placeholder, and the caller surfaces
+/// `fail` instead.
+struct HashWriteSink<'a, W: Write> {
+    sink: &'a mut W,
+    progress: &'a Progress,
+    hasher: Sha256,
+    fallback_total: u64,
+    fail: Option<String>,
+}
+
+impl<W: Write> StreamSink for HashWriteSink<'_, W> {
+    fn head(&mut self, status: u16, headers: &[(String, String)]) -> bool {
+        if !(200..300).contains(&status) {
+            self.fail = Some(format!("request failed: HTTP {status}"));
+            return false;
+        }
+        let total = header_u64(headers, "Content-Length").unwrap_or(self.fallback_total);
+        self.progress.total.store(total, Ordering::Relaxed);
+        self.progress.downloaded.store(0, Ordering::Relaxed);
+        true
+    }
+    fn chunk(&mut self, data: &[u8]) -> Result<(), HttpError> {
+        if self.progress.is_cancelled() {
+            self.fail = Some("cancelled".to_string());
+            return Err(HttpError::Io("cancelled".into()));
+        }
+        self.hasher.update(data);
+        if let Err(e) = self.sink.write_all(data) {
+            self.fail = Some(format!("write failed: {e}"));
+            return Err(HttpError::Io("write failed".into()));
+        }
+        self.progress
+            .downloaded
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
 /// Stream `url` into `sink`, updating `progress` as bytes arrive and folding each chunk into a
 /// running SHA-256. Returns the lowercase-hex digest so a caller can verify the download against a
 /// catalog hash without a second pass. Returns `Err("cancelled")` if `progress.cancel()` was
@@ -95,41 +149,134 @@ pub fn download_to(
     progress: &Progress,
     fallback_total: u64,
 ) -> Result<String, String> {
-    let resp = ureq::get(url)
-        .call()
-        .map_err(|e| format!("request failed: {e}"))?;
-    let total = resp
-        .headers()
-        .get("Content-Length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(fallback_total);
-    progress.total.store(total, Ordering::Relaxed);
-    progress.downloaded.store(0, Ordering::Relaxed);
-
-    let mut reader = resp.into_body().into_reader();
-    let mut hasher = Sha256::new();
-    let mut chunk = [0u8; 64 * 1024];
-    loop {
-        if progress.is_cancelled() {
-            return Err("cancelled".to_string());
-        }
-        let n = reader
-            .read(&mut chunk)
-            .map_err(|e| format!("read failed: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&chunk[..n]);
-        sink.write_all(&chunk[..n])
-            .map_err(|e| format!("write failed: {e}"))?;
-        progress.downloaded.fetch_add(n as u64, Ordering::Relaxed);
+    let mut s = HashWriteSink {
+        sink,
+        progress,
+        hasher: Sha256::new(),
+        fallback_total,
+        fail: None,
+    };
+    match day_part_http::fetch_streamed(&Request::get(url), &mut s) {
+        Ok(_) => Ok(hex_lower(&s.hasher.finalize())),
+        Err(e) => Err(s
+            .fail
+            .take()
+            .unwrap_or_else(|| format!("request failed: {e}"))),
     }
-    Ok(hex_lower(&hasher.finalize()))
+}
+
+/// [`StreamSink`] for [`download_to_file_resumable`]: decides append-vs-restart when the response
+/// head arrives (a `206` resumes the partial on disk — seeding the hasher from it — anything else
+/// in 2xx truncates and restarts), then hashes/writes/reports like [`HashWriteSink`].
+struct ResumeSink<'a> {
+    path: &'a std::path::Path,
+    progress: &'a Progress,
+    fallback_total: u64,
+    /// Partial bytes already on disk when a resume is attempted; 0 forces the fresh path.
+    existing: u64,
+    hasher: Sha256,
+    file: Option<std::fs::File>,
+    downloaded: u64,
+    wrote_any: bool,
+    fail: Option<String>,
+}
+
+impl<'a> ResumeSink<'a> {
+    fn new(
+        path: &'a std::path::Path,
+        progress: &'a Progress,
+        fallback_total: u64,
+        existing: u64,
+    ) -> Self {
+        Self {
+            path,
+            progress,
+            fallback_total,
+            existing,
+            hasher: Sha256::new(),
+            file: None,
+            downloaded: 0,
+            wrote_any: false,
+            fail: None,
+        }
+    }
+}
+
+impl StreamSink for ResumeSink<'_> {
+    fn head(&mut self, status: u16, headers: &[(String, String)]) -> bool {
+        let resume = self.existing > 0 && status == 206;
+        if !resume && !(200..300).contains(&status) {
+            self.fail = Some(format!("request failed: HTTP {status}"));
+            return false;
+        }
+        let (downloaded, total) = if resume {
+            // The full size is the `/total` in `Content-Range: bytes start-end/total`.
+            let total = header(headers, "Content-Range")
+                .and_then(|v| v.rsplit('/').next())
+                .and_then(|t| t.trim().parse::<u64>().ok())
+                .or_else(|| header_u64(headers, "Content-Length").map(|l| self.existing + l))
+                .unwrap_or(self.fallback_total);
+            // Seed the hasher with the on-disk bytes so the digest covers the whole file.
+            if let Err(e) = seed_hasher_from_file(self.path, &mut self.hasher) {
+                self.fail = Some(e);
+                return false;
+            }
+            match std::fs::OpenOptions::new().append(true).open(self.path) {
+                Ok(f) => self.file = Some(f),
+                Err(e) => {
+                    self.fail = Some(format!("open failed: {e}"));
+                    return false;
+                }
+            }
+            (self.existing, total)
+        } else {
+            // Fresh download — or the server ignored `Range` and answered `200`, in which case
+            // the body is the whole file: truncate and restart cleanly from zero.
+            self.hasher = Sha256::new();
+            match std::fs::File::create(self.path) {
+                Ok(f) => self.file = Some(f),
+                Err(e) => {
+                    self.fail = Some(format!("create file: {e}"));
+                    return false;
+                }
+            }
+            (
+                0,
+                header_u64(headers, "Content-Length").unwrap_or(self.fallback_total),
+            )
+        };
+        self.downloaded = downloaded;
+        self.progress.total.store(total, Ordering::Relaxed);
+        self.progress
+            .downloaded
+            .store(downloaded, Ordering::Relaxed);
+        true
+    }
+
+    fn chunk(&mut self, data: &[u8]) -> Result<(), HttpError> {
+        if self.progress.is_cancelled() {
+            self.fail = Some("cancelled".to_string());
+            return Err(HttpError::Io("cancelled".into()));
+        }
+        let Some(file) = self.file.as_mut() else {
+            return Err(HttpError::Io("no open file".into()));
+        };
+        self.hasher.update(data);
+        if let Err(e) = file.write_all(data) {
+            self.fail = Some(format!("write failed: {e}"));
+            return Err(HttpError::Io("write failed".into()));
+        }
+        self.wrote_any = true;
+        self.downloaded += data.len() as u64;
+        self.progress
+            .downloaded
+            .store(self.downloaded, Ordering::Relaxed);
+        Ok(())
+    }
 }
 
 /// Download `url` to `path`, **resuming** an existing partial file with an HTTP `Range` request
-/// when one is present (#11). Streams in 64 KiB chunks (a large APK never sits in memory), reports
+/// when one is present (#11). Streams in chunks (a large APK never sits in memory), reports
 /// progress, is cancellable, and returns the whole file's lowercase-hex SHA-256 — re-hashing the
 /// bytes already on disk so the digest covers the complete file. If the server ignores `Range`
 /// (answers `200` instead of `206`), it restarts cleanly from zero.
@@ -141,78 +288,34 @@ pub fn download_to_file_resumable(
 ) -> Result<String, String> {
     let existing = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
-    // Ask to resume when a partial file exists; fall back to a fresh GET on any Range failure.
-    let (mut reader, mut downloaded, total, append) = if existing > 0 {
-        match ureq::get(url)
-            .header("Range", &format!("bytes={existing}-"))
-            .call()
-        {
-            Ok(resp) if resp.status().as_u16() == 206 => {
-                // The full size is the `/total` in `Content-Range: bytes start-end/total`.
-                let total = resp
-                    .headers()
-                    .get("Content-Range")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.rsplit('/').next())
-                    .and_then(|t| t.trim().parse::<u64>().ok())
-                    .or_else(|| header_u64(&resp, "Content-Length").map(|l| existing + l))
-                    .unwrap_or(fallback_total);
-                (resp.into_body().into_reader(), existing, total, true)
-            }
-            // Range ignored (200) → the body is the whole file; restart from scratch.
-            Ok(resp) => {
-                let total = header_u64(&resp, "Content-Length").unwrap_or(fallback_total);
-                (resp.into_body().into_reader(), 0, total, false)
-            }
-            Err(_) => {
-                let resp = ureq::get(url)
-                    .call()
-                    .map_err(|e| format!("request failed: {e}"))?;
-                let total = header_u64(&resp, "Content-Length").unwrap_or(fallback_total);
-                (resp.into_body().into_reader(), 0, total, false)
+    // Ask to resume when a partial file exists. A failure at or before the response head falls
+    // back to a fresh GET; once bytes are moving (or the user cancelled), the error is final.
+    if existing > 0 {
+        let mut sink = ResumeSink::new(path, progress, fallback_total, existing);
+        match day_part_http::fetch_streamed(
+            &Request::get(url).header("Range", &format!("bytes={existing}-")),
+            &mut sink,
+        ) {
+            Ok(_) => return Ok(hex_lower(&sink.hasher.finalize())),
+            Err(e) => {
+                if sink.wrote_any || sink.fail.as_deref() == Some("cancelled") {
+                    return Err(sink
+                        .fail
+                        .take()
+                        .unwrap_or_else(|| format!("request failed: {e}")));
+                }
             }
         }
-    } else {
-        let resp = ureq::get(url)
-            .call()
-            .map_err(|e| format!("request failed: {e}"))?;
-        let total = header_u64(&resp, "Content-Length").unwrap_or(fallback_total);
-        (resp.into_body().into_reader(), 0, total, false)
-    };
-
-    progress.total.store(total, Ordering::Relaxed);
-    progress.downloaded.store(downloaded, Ordering::Relaxed);
-
-    // Seed the hasher: with the on-disk bytes when appending, else start clean (and truncate).
-    let mut hasher = Sha256::new();
-    let mut sink = if append {
-        seed_hasher_from_file(path, &mut hasher)?;
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(path)
-            .map_err(|e| format!("open failed: {e}"))?
-    } else {
-        std::fs::File::create(path).map_err(|e| format!("create file: {e}"))?
-    };
-
-    let mut chunk = [0u8; 64 * 1024];
-    loop {
-        if progress.is_cancelled() {
-            return Err("cancelled".to_string());
-        }
-        let n = reader
-            .read(&mut chunk)
-            .map_err(|e| format!("read failed: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&chunk[..n]);
-        sink.write_all(&chunk[..n])
-            .map_err(|e| format!("write failed: {e}"))?;
-        downloaded += n as u64;
-        progress.downloaded.store(downloaded, Ordering::Relaxed);
     }
-    Ok(hex_lower(&hasher.finalize()))
+
+    let mut sink = ResumeSink::new(path, progress, fallback_total, 0);
+    match day_part_http::fetch_streamed(&Request::get(url), &mut sink) {
+        Ok(_) => Ok(hex_lower(&sink.hasher.finalize())),
+        Err(e) => Err(sink
+            .fail
+            .take()
+            .unwrap_or_else(|| format!("request failed: {e}"))),
+    }
 }
 
 /// Fold a file's bytes into `hasher` in bounded chunks (used to re-hash a resumed partial).
@@ -229,14 +332,6 @@ fn seed_hasher_from_file(path: &std::path::Path, hasher: &mut Sha256) -> Result<
         hasher.update(&buf[..n]);
     }
     Ok(())
-}
-
-/// Parse a `u64` response header, e.g. `Content-Length`.
-fn header_u64<B>(resp: &ureq::http::Response<B>, name: &str) -> Option<u64> {
-    resp.headers()
-        .get(name)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok())
 }
 
 /// Stream `url` fully into memory (plus its SHA-256), for the bounded catalog index. Prefer
