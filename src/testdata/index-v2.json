@@ -68,5 +68,6 @@
         }
       }
     }
-  }
+  },
+  "rank": ["com.example.beta", "com.example.alpha"]
 }

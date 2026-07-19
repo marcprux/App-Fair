@@ -23,6 +23,11 @@ all_catalogs = Tous les catalogues
 all_categories = Toutes les catégories
 catalog_option = { $name } ({ $count })
 
+# Menu déroulant de tri
+sort_default = Par défaut
+sort_last_updated = Dernière mise à jour
+sort_name = Nom
+
 # Ligne d'état de synchronisation
 sync_checking = Recherche de mises à jour…
 sync_downloading_pct = Téléchargement du catalogue… { $pct } %

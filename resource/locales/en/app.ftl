@@ -24,6 +24,11 @@ all_catalogs = All Catalogs
 all_categories = All Categories
 catalog_option = { $name } ({ $count })
 
+# Sort order drop-down
+sort_default = Default
+sort_last_updated = Last Updated
+sort_name = Name
+
 # Sync status line
 sync_checking = Checking for updates…
 sync_downloading_pct = Downloading catalog… { $pct }%

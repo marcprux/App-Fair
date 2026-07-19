@@ -11,11 +11,22 @@ use diesel::sqlite::SqliteConnection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 
 use crate::fdroid::{self, IndexV2, Package};
-use crate::model::{AntiFeature, AppDetail, AppSummary, Category, RepoRow};
+use crate::model::{AntiFeature, AppDetail, AppSummary, Category, RepoRow, SortOrder};
 use crate::schema;
 
 /// The embedded schema migrations (from `migrations/`), applied on every [`open`].
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
+
+/// The `rank` stored for an app the catalog didn't rank (and for every app in a catalog without the
+/// `rank` extension). BigInt max, so `ORDER BY rank ASC` places ranked apps first and these last.
+/// Matches the migration's column default.
+const UNRANKED: i64 = i64::MAX;
+
+/// The version of the stored-catalog *shape* — bumped whenever App Fair starts reading a field it
+/// used to ignore (e.g. gaining `rank`). Persisted in `meta.catalog_epoch`; on a mismatch the sync
+/// re-imports the cached index even when the repo timestamp is unchanged, so a schema upgrade
+/// backfills the new field without waiting for the catalog to publish again (see `sync::run`).
+pub const CATALOG_EPOCH: &str = "2";
 
 /// A queried/insertable `apps` row — the flat storage shape (JSON columns are `String`s here,
 /// parsed into `Vec`s only when building [`AppDetail`]).
@@ -47,6 +58,9 @@ struct AppRow {
     anti_features: String,
     whats_new: String,
     signer: String,
+    /// Position in the catalog's `rank` array (0 = highest), or [`UNRANKED`] when the catalog didn't
+    /// rank this app.
+    rank: i64,
 }
 
 /// Open (creating if needed) the catalog database, run pending migrations, and set WAL so the main
@@ -272,8 +286,9 @@ pub fn repos(conn: &mut SqliteConnection) -> QueryResult<Vec<RepoRow>> {
 
 // --- sync (minimal writes) ---------------------------------------------------
 
-/// Build the flat `apps` row for one package in `locale`.
-fn build_app_row(repo_id: i64, pkg: &str, package: &Package, locale: &str) -> AppRow {
+/// Build the flat `apps` row for one package in `locale`. `rank` is the app's position in the
+/// catalog's `rank` array (or [`UNRANKED`]).
+fn build_app_row(repo_id: i64, pkg: &str, package: &Package, locale: &str, rank: i64) -> AppRow {
     let meta = &package.metadata;
     let name = fdroid::pick(&meta.name, locale)
         .cloned()
@@ -377,15 +392,18 @@ fn build_app_row(repo_id: i64, pkg: &str, package: &Package, locale: &str) -> Ap
         anti_features,
         whats_new,
         signer,
+        rank,
     }
 }
 
 /// Apply a freshly parsed index to `repo_id`, writing only rows that changed.
 ///
-/// Each app's `last_updated` acts as a change stamp: an app whose stamp already matches the stored
-/// value is left untouched — unless `force` (used when the locale changed, so every localized field
-/// must be re-picked). Apps missing from the new index are deleted. Categories and anti-feature
-/// definitions are replaced wholesale. The whole update runs in one transaction.
+/// Each app's `(last_updated, rank)` acts as a change stamp: an app whose stamp already matches the
+/// stored value is left untouched — unless `force` (used when the locale changed, so every localized
+/// field must be re-picked). Rank is part of the stamp because the catalog can reorder `rank`
+/// without touching `lastUpdated`, and that reshuffle must still be written. Apps missing from the
+/// new index are deleted. Categories and anti-feature definitions are replaced wholesale. The whole
+/// update runs in one transaction.
 pub fn upsert_index(
     conn: &mut SqliteConnection,
     repo_id: i64,
@@ -395,13 +413,22 @@ pub fn upsert_index(
 ) -> QueryResult<usize> {
     use schema::{anti_features, apps, categories, repos};
 
+    // Position of each ranked app (0 = highest); apps absent here get UNRANKED below.
+    let ranks: HashMap<&str, i64> = index
+        .rank
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.as_str(), i as i64))
+        .collect();
+
     conn.transaction(|conn| {
         // Existing change stamps, to skip unchanged apps.
-        let existing: HashMap<String, i64> = apps::table
+        let existing: HashMap<String, (i64, i64)> = apps::table
             .filter(apps::repo_id.eq(repo_id))
-            .select((apps::pkg, apps::last_updated))
-            .load::<(String, i64)>(conn)?
+            .select((apps::pkg, apps::last_updated, apps::rank))
+            .load::<(String, i64, i64)>(conn)?
             .into_iter()
+            .map(|(pkg, last_updated, rank)| (pkg, (last_updated, rank)))
             .collect();
 
         let mut seen = HashSet::new();
@@ -410,10 +437,11 @@ pub fn upsert_index(
         for (pkg, package) in &index.packages {
             seen.insert(pkg.clone());
             let last_updated = package.metadata.last_updated;
-            if !force && existing.get(pkg) == Some(&last_updated) {
+            let rank = ranks.get(pkg.as_str()).copied().unwrap_or(UNRANKED);
+            if !force && existing.get(pkg) == Some(&(last_updated, rank)) {
                 continue; // unchanged — skip the write
             }
-            let row = build_app_row(repo_id, pkg, package, locale);
+            let row = build_app_row(repo_id, pkg, package, locale, rank);
             diesel::replace_into(apps::table)
                 .values(&row)
                 .execute(conn)?;
@@ -512,16 +540,21 @@ fn to_summary(t: SummaryTuple) -> AppSummary {
     }
 }
 
-/// Search enabled repos. Empty `query` and `category` returns the most-recently-updated apps.
-/// `repo_id` restricts to one catalog (`None` = all enabled catalogs, deduplicated by repo
-/// priority, #6). `exclude_anti` hides apps carrying any of those anti-feature keys (#13). Results
-/// are relevance-ranked (#15).
+/// Search enabled repos. `repo_id` restricts to one catalog (`None` = all enabled catalogs,
+/// deduplicated by repo priority, #6). `exclude_anti` hides apps carrying any of those anti-feature
+/// keys (#13). `sort` chooses the list order (#15); `locale` is the device locale, used only for the
+/// [`SortOrder::Name`] collation.
+// Each argument is an independent query facet (filters, order, locale, limit); bundling them into a
+// struct would only move the list, not shorten it.
+#[allow(clippy::too_many_arguments)]
 pub fn search(
     conn: &mut SqliteConnection,
     query: &str,
     category: Option<&str>,
     repo_id: Option<i64>,
     exclude_anti: &[String],
+    sort: SortOrder,
+    locale: &str,
     limit: i64,
 ) -> QueryResult<Vec<AppSummary>> {
     use diesel::sql_types::Bool;
@@ -573,21 +606,38 @@ pub fn search(
         sel = sel.filter(apps::anti_features.not_like(format!("%\"{af}\"%")));
     }
 
-    // Relevance ranking: exact name, then name-prefix, name-contains, summary-contains, recency.
-    let sel = if q.is_empty() {
-        sel.order(apps::last_updated.desc())
-    } else {
-        sel.order((
+    // The sort drop-down chooses the primary order:
+    //  • Default browsing → the catalog's `rank` (unranked apps sink to UNRANKED), then recency.
+    //  • Default while searching → relevance first (exact name, name-prefix, name-contains,
+    //    summary-contains), with rank then recency as the tie-break so #15 still leads with matches.
+    //  • Last Updated → recency, ignoring rank and relevance.
+    //  • Name → collated in Rust below; ordered by binary name here only so the LIMIT window is
+    //    stable and roughly right before the locale-correct re-sort.
+    let sel = match sort {
+        SortOrder::LastUpdated => sel.order(apps::last_updated.desc()),
+        SortOrder::Name => sel.order(apps::name.asc()),
+        SortOrder::Default if q.is_empty() => {
+            sel.order((apps::rank.asc(), apps::last_updated.desc()))
+        }
+        SortOrder::Default => sel.order((
             apps::name.eq(q.to_string()).desc(),
             apps::name.like(format!("{q}%")).desc(),
             apps::name.like(like.clone()).desc(),
             apps::summary.like(like).desc(),
+            apps::rank.asc(),
             apps::last_updated.desc(),
-        ))
+        )),
     };
 
     let rows: Vec<SummaryTuple> = sel.limit(limit).load(conn)?;
-    Ok(rows.into_iter().map(to_summary).collect())
+    let mut out: Vec<AppSummary> = rows.into_iter().map(to_summary).collect();
+    if sort == SortOrder::Name {
+        // The bundled SQLite can't collate, so order alphabetically for the device locale here (e.g.
+        // accented letters land in the right place). Confined to the loaded window, which is the full
+        // result set unless a catalog exceeds `limit`.
+        crate::collate::sort_by_name(locale, &mut out, |a| a.name.as_str());
+    }
+    Ok(out)
 }
 
 /// The catalog summary for one package (the winning enabled repo by priority, #6), for the
@@ -741,17 +791,61 @@ mod tests {
         assert_eq!(r[0].name, "Test Repo");
 
         // Browse + search + ordering (exact-name matches first).
-        assert_eq!(search(&mut conn, "", None, None, &[], 10).unwrap().len(), 2);
-        let hits = search(&mut conn, "Alpha", None, None, &[], 10).unwrap();
+        assert_eq!(
+            search(
+                &mut conn,
+                "",
+                None,
+                None,
+                &[],
+                SortOrder::Default,
+                "en-US",
+                10
+            )
+            .unwrap()
+            .len(),
+            2
+        );
+        let hits = search(
+            &mut conn,
+            "Alpha",
+            None,
+            None,
+            &[],
+            SortOrder::Default,
+            "en-US",
+            10,
+        )
+        .unwrap();
         assert_eq!(hits[0].pkg, "com.example.alpha");
 
         // Category filter (matches the JSON array text).
-        let sys = search(&mut conn, "", Some("System"), None, &[], 10).unwrap();
+        let sys = search(
+            &mut conn,
+            "",
+            Some("System"),
+            None,
+            &[],
+            SortOrder::Default,
+            "en-US",
+            10,
+        )
+        .unwrap();
         assert_eq!(sys.len(), 1);
         assert_eq!(sys[0].pkg, "com.example.beta");
 
         // Anti-feature exclusion (#13): hiding "Tracking" drops alpha.
-        let filtered = search(&mut conn, "", None, None, &["Tracking".to_string()], 10).unwrap();
+        let filtered = search(
+            &mut conn,
+            "",
+            None,
+            None,
+            &["Tracking".to_string()],
+            SortOrder::Default,
+            "en-US",
+            10,
+        )
+        .unwrap();
         assert!(filtered.iter().all(|a| a.pkg != "com.example.alpha"));
 
         let cat_names: Vec<String> = categories(&mut conn)
@@ -785,6 +879,49 @@ mod tests {
         assert_eq!(
             app_name(&mut conn, repo_id, "com.example.alpha").as_deref(),
             Some("Alpha")
+        );
+    }
+
+    #[test]
+    fn sort_orders() {
+        // testdata ranks beta above alpha — the reverse of recency (alpha lastUpdated 100 > beta 90)
+        // and of name order (Alpha < Beta) — so each sort produces a distinguishable result.
+        let (mut conn, _repo_id) = setup("en-US");
+        let pkgs = |v: &[AppSummary]| v.iter().map(|a| a.pkg.clone()).collect::<Vec<_>>();
+
+        // Default browse follows the catalog's rank.
+        let by_rank = search(
+            &mut conn,
+            "",
+            None,
+            None,
+            &[],
+            SortOrder::Default,
+            "en-US",
+            10,
+        )
+        .unwrap();
+        assert_eq!(pkgs(&by_rank), ["com.example.beta", "com.example.alpha"]);
+
+        // Last Updated ignores rank: most-recently-updated first.
+        let by_updated = search(
+            &mut conn,
+            "",
+            None,
+            None,
+            &[],
+            SortOrder::LastUpdated,
+            "en-US",
+            10,
+        )
+        .unwrap();
+        assert_eq!(pkgs(&by_updated), ["com.example.alpha", "com.example.beta"]);
+
+        // Name is alphabetical by collation, independent of rank and recency.
+        let by_name = search(&mut conn, "", None, None, &[], SortOrder::Name, "en-US", 10).unwrap();
+        assert_eq!(
+            by_name.iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
+            ["Alpha", "Beta"]
         );
     }
 

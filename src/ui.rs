@@ -7,7 +7,7 @@ use day_piece_picker::picker;
 use day_piece_remote_image::ContentMode;
 use day_piece_searchfield::search_field;
 
-use crate::model::AppSummary;
+use crate::model::{AppSummary, SortOrder};
 use crate::state::{self, SyncUi};
 use crate::{Nav, push_nav, sync};
 
@@ -18,6 +18,7 @@ const ACCENT: Color = Color::hex(0x2F_6F_DE);
 pub fn catalogs_page(path: Signal<Vec<Nav>>) -> AnyPiece {
     let query = state::query();
     let category = state::category();
+    let sort = state::sort_order();
     let version = state::catalog_version();
 
     let switcher = each(
@@ -25,17 +26,26 @@ pub fn catalogs_page(path: Signal<Vec<Nav>>) -> AnyPiece {
         |v: &u64| *v,
         move |_| catalog_switcher(),
     );
-    let header = row((
-        switcher.any().grow_w(),
-        button(crate::res::str::btn_add())
-            .action(move || push_nav(path, Nav::AddCatalog))
-            .id("catalog-add"),
+    // Adding a custom F-Droid catalog is still a beta feature — the "Add" button is exposed only in
+    // debug builds; release builds hide it and browse the default App Fair catalog alone.
+    let mut header_items: Vec<AnyPiece> = vec![switcher.any().grow_w()];
+    if cfg!(debug_assertions) {
+        header_items.push(
+            button(crate::res::str::btn_add())
+                .action(move || push_nav(path, Nav::AddCatalog))
+                .id("catalog-add")
+                .any(),
+        );
+    }
+    header_items.push(
         button(crate::res::str::btn_refresh())
             .action(sync::sync_all_enabled)
-            .id("refresh"),
-    ))
-    .align(VAlign::Center)
-    .spacing(8.0);
+            .id("refresh")
+            .any(),
+    );
+    let header = row(PieceVec(header_items))
+        .align(VAlign::Center)
+        .spacing(8.0);
 
     let search = search_field(query)
         .placeholder(crate::res::str::search_placeholder())
@@ -46,6 +56,10 @@ pub fn catalogs_page(path: Signal<Vec<Nav>>) -> AnyPiece {
         |v: &u64| *v,
         move |_| category_picker(category),
     );
+    // The category filter (which grows to fill) and the sort-order drop-down share one row.
+    let controls = row((category_region.any().grow_w(), sort_picker(sort)))
+        .spacing(8.0)
+        .align(VAlign::Center);
 
     let sync_line = label(move || sync_text(&state::sync_signal().get()))
         .font(Font::Footnote)
@@ -82,11 +96,38 @@ pub fn catalogs_page(path: Signal<Vec<Nav>>) -> AnyPiece {
     .id("app-list")
     .grow();
 
-    column((header, search, category_region.any(), sync_line, list))
+    column((header, search, controls, sync_line, list))
         .spacing(10.0)
         .align(HAlign::Leading)
         .padding(12.0)
         .any()
+}
+
+/// A native dropdown choosing the catalog list's sort order: Default (the catalog's `rank`), Last
+/// Updated, or Name (locale-collated). Selecting one re-queries the list via [`state::search_apps`].
+fn sort_picker(sort: Signal<SortOrder>) -> AnyPiece {
+    let orders = [SortOrder::Default, SortOrder::LastUpdated, SortOrder::Name];
+    let labels: Vec<String> = vec![
+        crate::res::str::sort_default().format(),
+        crate::res::str::sort_last_updated().format(),
+        crate::res::str::sort_name().format(),
+    ];
+
+    let current = sort.get_untracked();
+    let start = orders.iter().position(|o| *o == current).unwrap_or(0);
+    let sel = Signal::new(start);
+
+    watch(
+        move || sel.get(),
+        move |idx: &usize, _| {
+            let chosen = orders.get(*idx).copied().unwrap_or_default();
+            if sort.get_untracked() != chosen {
+                sort.set(chosen);
+            }
+        },
+    );
+
+    picker(labels, sel).menu().id("sort-picker").any()
 }
 
 /// A native dropdown of "All Catalogs" + each enabled catalog. Selecting one filters the list.

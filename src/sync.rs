@@ -80,6 +80,10 @@ fn run(address: &str, index_file: &str) -> Result<(), String> {
     let locale = locale();
     let synced_locale = crate::db::get_meta(&mut conn, "catalog_locale").unwrap_or_default();
     let locale_changed = synced_locale != locale;
+    // A stored-shape upgrade (e.g. gaining `rank`) forces a re-import so the new field backfills.
+    let synced_epoch = crate::db::get_meta(&mut conn, "catalog_epoch").unwrap_or_default();
+    let epoch_changed = synced_epoch != crate::db::CATALOG_EPOCH;
+    let reimport = locale_changed || epoch_changed;
     let fingerprint = crate::db::repo_fingerprint(&mut conn, repo_id);
     // The primary host followed by any mirrors this repo declared, tried in order (#12).
     let bases = net::bases(address, &crate::db::repo_mirrors(&mut conn, repo_id));
@@ -94,15 +98,15 @@ fn run(address: &str, index_file: &str) -> Result<(), String> {
         .is_some_and(|e| e.timestamp == stored && stored != 0);
 
     // Nothing changed at all.
-    if up_to_date && !locale_changed {
+    if up_to_date && !reimport {
         state::set_sync(SyncUi::UpToDate);
         return Ok(());
     }
 
-    // Only the locale changed: re-import the cached index in the new language — no download. If
+    // Only the locale or the stored shape changed: re-import the cached index — no download. If
     // there's no usable cache, this falls through to a full download below.
     if up_to_date
-        && locale_changed
+        && reimport
         && let Some(cached) = cache::read_index(address)
         && let Ok(index) = serde_json::from_slice::<IndexV2>(&cached)
     {
@@ -123,7 +127,7 @@ fn run(address: &str, index_file: &str) -> Result<(), String> {
     cache::write_index(address, &bytes);
 
     state::set_sync(SyncUi::Building);
-    finish(&mut conn, repo_id, &index, &locale, locale_changed)
+    finish(&mut conn, repo_id, &index, &locale, reimport)
 }
 
 /// Fetch the repo's entry: the verified signed `entry.jar` when a fingerprint is pinned (and this
@@ -155,11 +159,28 @@ fn finish(
 ) -> Result<(), String> {
     let changed = crate::db::upsert_index(conn, repo_id, index, locale, force)
         .map_err(|e| format!("store: {e}"))?;
-    // Record the locale this catalog data was picked for, so a later locale change is detected.
+    // Record the locale this catalog data was picked for, so a later locale change is detected, and
+    // the stored-shape epoch, so a later App Fair upgrade knows this data predates a new field.
     let _ = crate::db::set_meta(conn, "catalog_locale", locale);
+    let _ = crate::db::set_meta(conn, "catalog_epoch", crate::db::CATALOG_EPOCH);
+    // Refresh the icon loader's mirror-fallback map from the current repos, so icons/screenshots a
+    // metadata-only repo doesn't host fall back to its mirrors (#12). Done before the catalog bump
+    // that re-renders the list (and requests icons).
+    crate::icons::set_mirror_bases(mirror_map(conn));
     state::bump_catalog();
     state::set_sync(SyncUi::Done(changed));
     Ok(())
+}
+
+/// Each repo's address paired with its mirror bases (primary-first), for the icon loader's image
+/// fallback.
+fn mirror_map(conn: &mut SqliteConnection) -> Vec<(String, Vec<String>)> {
+    let mut out = Vec::new();
+    for r in crate::db::repos(conn).unwrap_or_default() {
+        let mirrors = crate::db::repo_mirrors(conn, r.id);
+        out.push((r.address, mirrors));
+    }
+    out
 }
 
 /// Get the current index bytes + parsed index. Prefers an incremental diff (`entry.diffs[stored]`)

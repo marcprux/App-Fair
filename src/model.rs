@@ -123,6 +123,20 @@ pub struct Category {
     pub name: String,
 }
 
+/// How the catalog list is ordered, chosen from the sort drop-down.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SortOrder {
+    /// The catalog's editorial `rank`, falling back to recency for apps a catalog didn't rank (and
+    /// for whole catalogs without the `rank` extension). While a search query is active this keeps
+    /// relevance first, with rank/recency as the tie-break.
+    #[default]
+    Default,
+    /// Most recently updated first — ignores rank and relevance.
+    LastUpdated,
+    /// Alphabetical by name, using the device locale's collation (see `crate::collate`).
+    Name,
+}
+
 /// Split an index URL (`https://host/repo/index-v2.json`) into (base address, index filename).
 /// The base is everything up to the final `/`; the filename defaults to `index-v2.json`.
 pub fn split_index_url(url: &str) -> (String, String) {

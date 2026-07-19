@@ -9,6 +9,7 @@ use day::prelude::*;
 
 mod cache;
 mod catalogs_add;
+mod collate;
 mod db;
 mod detail;
 mod fdroid;

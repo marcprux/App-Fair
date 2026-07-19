@@ -61,6 +61,11 @@ pub struct IndexV2 {
     pub repo: Repo,
     #[serde(default)]
     pub packages: BTreeMap<String, Package>,
+    /// App Fair Index V2 extension: application ids in editorial order, highest-ranked first. Absent
+    /// from stock F-Droid indexes (`serde(default)` → empty), so it's an optional lever a catalog
+    /// opts into; it drives the "Default" sort order when present (an app's rank is its position).
+    #[serde(default)]
+    pub rank: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

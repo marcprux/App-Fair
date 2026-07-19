@@ -12,15 +12,20 @@ use day::prelude::*;
 use diesel::sqlite::SqliteConnection;
 
 use crate::db;
-use crate::model::{AppDetail, AppSummary, Category, RepoRow};
+use crate::model::{AppDetail, AppSummary, Category, RepoRow, SortOrder};
 use crate::platform;
 
 /// Remaining apps in a "Update all" batch — each installs after the previous reaches a terminal
 /// state (#8). Empty for a normal single install, so it never affects that path.
 static UPDATE_QUEUE: Mutex<Vec<AppDetail>> = Mutex::new(Vec::new());
 
-/// The default catalog: the official F-Droid Index V2.
-pub const DEFAULT_INDEX_URL: &str = "https://f-droid.org/repo/index-v2.json";
+/// The default catalog: the App Fair Index V2 repository.
+pub const DEFAULT_INDEX_URL: &str = "https://appfair.net/repo/index-v2.json";
+
+/// The App Fair repo's pinned signing-certificate fingerprint (SHA-256 of the signing cert, the
+/// value `verifyEntryJar` derives), so the default catalog's signed index is verified (#1).
+const DEFAULT_FINGERPRINT: &str =
+    "ddbbea5229957f75299c485d3b831ac30598459ad2ac69c293867163b4ed3c71";
 
 /// Progress of a catalog sync, shown in the list header.
 #[derive(Clone, Debug, PartialEq)]
@@ -62,6 +67,8 @@ struct State {
     category: Signal<Option<String>>,
     /// The catalog to browse (`None` = all enabled catalogs).
     repo_filter: Signal<Option<i64>>,
+    /// The catalog list's sort order (the sort drop-down).
+    sort: Signal<SortOrder>,
     catalog_version: Signal<u64>,
     sync: Signal<SyncUi>,
     install: Signal<Option<InstallUi>>,
@@ -99,6 +106,7 @@ fn with_state<R>(f: impl FnOnce(&State) -> R) -> R {
                 query: Signal::new(String::new()),
                 category: Signal::new(None),
                 repo_filter: Signal::new(None),
+                sort: Signal::new(SortOrder::default()),
                 catalog_version: Signal::new(0),
                 sync: Signal::new(SyncUi::Idle),
                 install: Signal::new(None),
@@ -120,6 +128,9 @@ pub fn category() -> Signal<Option<String>> {
 }
 pub fn repo_filter() -> Signal<Option<i64>> {
     with_state(|s| s.repo_filter)
+}
+pub fn sort_order() -> Signal<SortOrder> {
+    with_state(|s| s.sort)
 }
 pub fn catalog_version() -> Signal<u64> {
     with_state(|s| s.catalog_version)
@@ -160,16 +171,12 @@ pub fn with_db<R>(f: impl FnOnce(&mut SqliteConnection) -> R) -> R {
             match db::open(&path) {
                 Ok(mut conn) => {
                     // The default catalog exists from first launch (empty until first sync), with
-                    // the official F-Droid signing fingerprint pinned so its index is verified (#1).
+                    // the App Fair repo's signing fingerprint pinned so its index is verified (#1).
                     let base = crate::model::split_index_url(DEFAULT_INDEX_URL).0;
                     if let Ok(id) = db::ensure_repo(&mut conn, &base)
                         && db::repo_fingerprint(&mut conn, id).is_empty()
                     {
-                        let _ = db::set_repo_fingerprint(
-                            &mut conn,
-                            id,
-                            "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab",
-                        );
+                        let _ = db::set_repo_fingerprint(&mut conn, id, DEFAULT_FINGERPRINT);
                     }
                     *cell.borrow_mut() = Some(conn);
                 }
@@ -184,8 +191,23 @@ pub fn search_apps() -> Vec<AppSummary> {
     let q = query().get();
     let cat = category().get();
     let repo = repo_filter().get();
+    let sort = sort_order().get();
     let excluded = crate::settings::excluded_anti_features();
-    with_db(|conn| db::search(conn, &q, cat.as_deref(), repo, &excluded, 500).unwrap_or_default())
+    // The device locale drives the "Name" collation; cached, so this is cheap.
+    let locale = platform::device_locale();
+    with_db(|conn| {
+        db::search(
+            conn,
+            &q,
+            cat.as_deref(),
+            repo,
+            &excluded,
+            sort,
+            &locale,
+            500,
+        )
+        .unwrap_or_default()
+    })
 }
 
 /// The installed-package list tagged with the install generation it was enumerated at.

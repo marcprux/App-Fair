@@ -40,6 +40,7 @@ diesel::table! {
         anti_features -> Text,
         whats_new -> Text,
         signer -> Text,
+        rank -> BigInt,
     }
 }
 
