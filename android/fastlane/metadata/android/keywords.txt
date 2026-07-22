@@ -1,0 +1,4 @@
+# Google Play has no keywords field — ASO comes from the title + descriptions below.
+# These terms are woven into full_description and are provided here for the Apple App Store
+# (App Store Connect keywords, 100-char comma-separated list) and for reference.
+app store, F-Droid, open source, FOSS, apps, catalog, repository, sideload, updates, privacy, free software, app manager

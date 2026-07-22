@@ -127,6 +127,12 @@ pub fn root() -> AnyPiece {
         // instead of syncing from the network, and skip background update checks.
         day_reactive::on_main(mock::seed);
     } else {
+        // Seed the icon loader's mirror map from the cached catalog synchronously, BEFORE the list
+        // requests any icons. A metadata-only repo (appfair.net) hosts no images itself and points
+        // at F-Droid mirrors; without this, icons requested on launch 404 on the primary and — since
+        // `sync_all_enabled` only refreshes the map when its background sync finishes — never fall
+        // back to a mirror. `sync_all_enabled` refreshes the map afterwards.
+        state::with_db(|c| icons::set_mirror_bases(sync::mirror_map(c)));
         // Check every enabled catalog for updates after first paint.
         day_reactive::on_main(sync::sync_all_enabled);
         // Register the daily background update check (idempotent; keeps any existing schedule) (#7).

@@ -1,0 +1,16 @@
+App Fair est une boutique d'applications ouverte et respectueuse de la vie privée pour les catalogues compatibles F-Droid. Parcourez des applications libres et open source (FOSS), consultez leurs détails, et installez-les ou mettez-les à jour directement depuis les dépôts de votre choix — sans compte, sans pistage, sans publicité.
+
+Ajoutez n'importe quel catalogue compatible F-Droid par son adresse (le dépôt officiel F-Droid est inclus), puis parcourez par catégorie, recherchez, et triez par nom, par nouveauté ou selon le classement du catalogue. Chaque icône, capture, description et téléchargement provient directement du catalogue que vous avez choisi.
+
+FONCTIONNALITÉS
+• Parcourez et recherchez des applis open source des catalogues compatibles F-Droid
+• Filtrez par catégorie et masquez les applis présentant des anti-fonctionnalités
+• Installez et mettez à jour — Android affiche sa confirmation d'installation habituelle
+• Suivez les mises à jour des applis installées via App Fair
+• Ajoutez, activez, désactivez ou supprimez vos propres catalogues
+• Tri adapté à la langue et interface entièrement native
+
+CONFIDENTIALITÉ
+App Fair ne communique qu'avec les catalogues que vous ajoutez. Aucun compte, aucune analyse — les vérifications de mise à jour et les téléchargements vont directement à ces dépôts, et rien de ce que vous parcourez ou installez ne quitte votre appareil. App Fair ne collecte aucune donnée personnelle.
+
+App Fair est un logiciel libre et open source, conçu avec le framework Day.

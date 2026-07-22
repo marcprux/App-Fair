@@ -1,0 +1,16 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- App Fair mark: a shopping bag holding a 2x2 grid of apps. Clean single symbol; the motif
+       is composited over the gradient background for the full icon, or used as the adaptive
+       foreground. Stays legible down to 48px. -->
+  <defs>
+    <filter id="sh" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#0B2A66" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+  <path d="M382 396 C382 306 642 306 642 396" fill="none" stroke="#FF6B5E" stroke-width="38" stroke-linecap="round"/>
+  <rect x="294" y="384" width="436" height="384" rx="58" fill="#FFFFFF" filter="url(#sh)"/>
+  <rect x="393" y="457" width="104" height="104" rx="26" fill="#2F6FDE"/>
+  <rect x="527" y="457" width="104" height="104" rx="26" fill="#22B07A"/>
+  <rect x="393" y="591" width="104" height="104" rx="26" fill="#FF8A3D"/>
+  <rect x="527" y="591" width="104" height="104" rx="26" fill="#F0C23A"/>
+</svg>

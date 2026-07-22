@@ -1,0 +1,6 @@
+# Google Play upload identity for `fastlane supply` (docs: docs.fastlane.tools/actions/supply).
+package_name("org.appfair.AppFair")
+
+# Service-account JSON with Play Developer API access. This is the GOOGLE PLAY credential
+# (misc/keys/google-play-apikey.json → app-fair-425519-56d59cab3406.json).
+json_key_file("/opt/src/github/appfair/misc/keys/google-play-apikey.json")

@@ -1,0 +1,28 @@
+# App Fair — Google Play lanes. `validate` is a safe DRY RUN (no publish); `internal_draft`
+# uploads to the internal track as an unreleased draft. Neither promotes to production.
+default_platform(:android)
+
+aab_path = File.expand_path("../../build/day/dist/app-fair-1.0.0.aab", __dir__)
+
+platform :android do
+  desc "Dry run: validate the store listing + AAB against Google Play WITHOUT publishing."
+  lane :validate do
+    supply(
+      aab: aab_path,
+      track: "internal",
+      release_status: "draft",
+      validate_only: true,      # contacts the Play API, validates, and rolls the edit back
+      skip_upload_apk: true,
+      skip_upload_changelogs: false,
+    )
+  end
+
+  desc "Upload the AAB + metadata to the INTERNAL track as a draft (not released to users)."
+  lane :internal_draft do
+    supply(
+      aab: aab_path,
+      track: "internal",
+      release_status: "draft",  # stays a draft in the Play Console until a human promotes it
+    )
+  end
+end

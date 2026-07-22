@@ -1,0 +1,17 @@
+<svg width="1024" height="500" viewBox="0 0 1024 500" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4C86FF"/><stop offset="1" stop-color="#2E63E0"/></linearGradient>
+    <filter id="sh" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#0B2A66" flood-opacity="0.25"/></filter>
+  </defs>
+  <rect width="1024" height="500" fill="url(#sky)"/>
+  <g transform="translate(250 250) scale(0.62) translate(-512 -560)">
+    <path d="M382 396 C382 306 642 306 642 396" fill="none" stroke="#FF6B5E" stroke-width="38" stroke-linecap="round"/>
+    <rect x="294" y="384" width="436" height="384" rx="58" fill="#FFFFFF" filter="url(#sh)"/>
+    <rect x="393" y="457" width="104" height="104" rx="26" fill="#2F6FDE"/>
+    <rect x="527" y="457" width="104" height="104" rx="26" fill="#22B07A"/>
+    <rect x="393" y="591" width="104" height="104" rx="26" fill="#FF8A3D"/>
+    <rect x="527" y="591" width="104" height="104" rx="26" fill="#F0C23A"/>
+  </g>
+  <text x="470" y="238" font-family="Helvetica, Arial, sans-serif" font-size="96" font-weight="700" fill="#FFFFFF">App Fair</text>
+  <text x="474" y="300" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="400" fill="#DCE8FF">A free and open source app store</text>
+</svg>

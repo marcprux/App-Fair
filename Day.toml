@@ -8,9 +8,20 @@ schema = 1
 [app]
 id = "org.appfair.AppFair"
 title = "App Fair"
-build = 1
+build = 2
 targets = ["android-widget", "ios-uikit"]
 
 [window]
 width = 960
 height = 640
+
+# Release signing. `day pack -p android-widget --profile release` resolves these `${VAR}` refs
+# at pack time and writes the Gradle signingConfig; a missing var degrades to a dev keystore
+# (validate with `day sign --check`). Set the vars from misc/keys/keystore.properties + keystore.jks:
+#   export DAY_ANDROID_KEYSTORE=/abs/path/keystore.jks DAY_ANDROID_KEY_ALIAS=app \
+#          DAY_KS_PASS=… DAY_KEY_PASS=…
+[signing.android]
+keystore = "${DAY_ANDROID_KEYSTORE}"
+key-alias = "${DAY_ANDROID_KEY_ALIAS}"
+store-pass = "${DAY_KS_PASS}"
+key-pass = "${DAY_KEY_PASS}"

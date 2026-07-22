@@ -173,8 +173,9 @@ fn finish(
 }
 
 /// Each repo's address paired with its mirror bases (primary-first), for the icon loader's image
-/// fallback.
-fn mirror_map(conn: &mut SqliteConnection) -> Vec<(String, Vec<String>)> {
+/// fallback. Called after a sync and once at startup (from the cached catalog) so image fallback
+/// is ready before the first icons are requested.
+pub(crate) fn mirror_map(conn: &mut SqliteConnection) -> Vec<(String, Vec<String>)> {
     let mut out = Vec::new();
     for r in crate::db::repos(conn).unwrap_or_default() {
         let mirrors = crate::db::repo_mirrors(conn, r.id);
