@@ -34,8 +34,7 @@ day-piece-remote-image = { git = "https://github.com/daybrite/day.git" }
 day-part-prefs = { git = "https://github.com/daybrite/day.git" }
 # Native search control for the browse page.
 day-piece-searchfield = { git = "https://github.com/daybrite/day.git" }
-# Native dropdown for the category filter.
-day-piece-picker = { git = "https://github.com/daybrite/day.git" }
+# The native dropdown (`picker`) for the category/sort/catalog filters is now a built-in in `day`.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # On-device catalog. Diesel is the query/schema layer; libsqlite3-sys `bundled` compiles SQLite in

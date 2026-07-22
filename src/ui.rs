@@ -3,7 +3,6 @@
 //! page onto the tab's navigation stack.
 
 use day::prelude::*;
-use day_piece_picker::picker;
 use day_piece_remote_image::ContentMode;
 use day_piece_searchfield::search_field;
 
