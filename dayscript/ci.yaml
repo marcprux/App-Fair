@@ -3,7 +3,7 @@
 # tasteful subset of F-Droid), so it's fully offline and deterministic — no 50 MB index download.
 # CI runs it per target and per locale; run it locally with:
 #
-#     day launch -p android-widget --script dayscript/ci.yaml --env APP_FAIR_MOCK=1
+#     day launch -p android-mdc --script dayscript/ci.yaml --env APP_FAIR_MOCK=1
 #
 # `pause` steps let a native push/tab transition finish before the shot (wait_idle settles the
 # reactive tree, not the animation). Rows are ordered by recency; the mock catalog's indices are

@@ -10,7 +10,7 @@ export DAY_ANDROID_KEYSTORE=/opt/src/github/appfair/misc/keys/keystore.jks \
        DAY_ANDROID_KEY_ALIAS=app \
        DAY_KS_PASS=…  DAY_KEY_PASS=…          # from misc/keys/keystore.properties
 day sign --check                              # expect: android: ok (release signing ready)
-day pack -p android-widget --profile release  # → build/day/dist/app-fair-1.0.0.{apk,aab}
+day pack -p android-mdc --profile release  # → build/day/dist/app-fair-1.0.0.{apk,aab}
 ```
 
 Verified: the `.apk`/`.aab` are signed with the release key (signer SHA-256

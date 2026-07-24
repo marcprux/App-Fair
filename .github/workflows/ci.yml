@@ -14,7 +14,7 @@ jobs:
     uses: daybrite/actions/.github/workflows/build-day-app.yml@main
     secrets: inherit
     with:
-      targets: android-widget
+      targets: android-mdc
       day-version: main
       # The walkthrough runs against the bundled mock catalog (APP_FAIR_MOCK=1) so screenshots are
       # deterministic and offline — no 50 MB F-Droid index download in CI.

@@ -31,8 +31,8 @@ Day compiles one backend per binary, so choose a target. The Day CLI supplies th
 
 ```sh
 day doctor                        # check the toolchains for your targets
-day launch -p android-widget      # build + run on a device/emulator
-day launch -p android-widget --script dayscript/ci.yaml --env APP_FAIR_MOCK=1   # scripted, offline
+day launch -p android-mdc      # build + run on a device/emulator
+day launch -p android-mdc --script dayscript/ci.yaml --env APP_FAIR_MOCK=1   # scripted, offline
 ```
 
 ## Release
@@ -43,7 +43,7 @@ Signing keys are referenced from `Day.toml` (`[signing.android]`) via environmen
 export DAY_ANDROID_KEYSTORE=/path/to/keystore.jks DAY_ANDROID_KEY_ALIAS=app \
        DAY_KS_PASS=… DAY_KEY_PASS=…
 day sign --check                               # confirm the config resolves
-day pack -p android-widget --profile release   # signed app-fair-<version>.apk + .aab in build/day/dist/
+day pack -p android-mdc --profile release   # signed app-fair-<version>.apk + .aab in build/day/dist/
 ```
 
 Play Store listing metadata and the `supply` dry run live in [`android/fastlane/`](android/fastlane).
