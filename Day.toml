@@ -8,7 +8,7 @@ schema = 1
 [app]
 id = "org.appfair.AppFair"
 title = "App Fair"
-build = 2
+build = 3
 targets = ["android-widget", "ios-uikit"]
 
 [window]
