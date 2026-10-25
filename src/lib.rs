@@ -84,7 +84,7 @@ impl Route for Nav {
 pub(crate) fn nav_destination(n: &Nav) -> AnyPiece {
     match n {
         Nav::App { repo_id, pkg } => detail::detail_page(*repo_id, pkg.clone()),
-        Nav::AddCatalog => catalogs_add::add_catalog_page(),
+        Nav::AddCatalog => catalogs_add::add_catalog_page().any(),
     }
 }
 
@@ -95,7 +95,7 @@ pub(crate) fn push_nav(path: Signal<Vec<Nav>>, dest: Nav) {
     path.set(v);
 }
 
-pub fn root() -> AnyPiece {
+pub fn root() -> impl Piece {
     // Register UI locales (English + French) before building any piece, then follow the device
     // language (#16). Only these two ship, so anything else stays on the English default.
     install_locales(
@@ -139,52 +139,56 @@ pub fn root() -> AnyPiece {
         platform::schedule_update_checks();
     }
 
-    let tab = Signal::new(Tab::Catalogs);
-    let catalog_path = Signal::new(Vec::<Nav>::new());
-    let updates_path = Signal::new(Vec::<Nav>::new());
+    // File ▸ New Window (docs/windows.md) — on mobile this is a second scene: an iPad window or
+    // an Android document activity. The SAME shell builds again, which is why the browse state
+    // (search, filters, sort) and the tab stacks live on a `Scene` rather than in globals.
+    day::register_new_window(window_shell);
 
-    let tabs = selector(tab)
-        .style(SelectorStyle::Tabs)
-        .item_icon(
-            Tab::Catalogs,
-            res::str::tab_catalogs(),
-            res::images::tab_catalogs,
-            move || {
-                stack(catalog_path, ui::catalogs_page(catalog_path))
-                    .title(res::str::app_title())
-                    .destination(nav_destination)
-            },
-        )
-        .item_icon(
-            Tab::Updates,
-            res::str::tab_updates(),
-            res::images::tab_updates,
-            move || {
-                stack(updates_path, updates::updates_page(updates_path))
-                    .title(res::str::nav_updates())
-                    .destination(nav_destination)
-            },
-        )
-        .item_icon(
-            Tab::Settings,
-            res::str::tab_settings(),
-            res::images::tab_settings,
-            settings::settings_page,
-        )
-        .id("tabs");
+    window_shell()
+}
 
-    // The install overlay floats above everything whenever an install is in progress.
-    let install = state::install_signal();
-    zstack((
-        tabs.any(),
-        when(
-            move || install.get().is_some(),
-            install_sheet::install_sheet,
-        ),
-    ))
-    .any()
+/// One window's UI — the first window's, and every File ▸ New Window's.
+fn window_shell() -> impl Piece {
+    state::Scene::scoped(|_scene| {
+        let tab = Signal::new(Tab::Catalogs);
+        let catalog_path = Signal::new(Vec::<Nav>::new());
+        let updates_path = Signal::new(Vec::<Nav>::new());
+
+        let tabs = nav(tab)
+            .style(NavStyle::Tabs)
+            .items((
+                item(Tab::Catalogs, res::str::tab_catalogs())
+                    .icon(res::images::tab_catalogs)
+                    .page(move || {
+                        nav_stack(catalog_path, ui::catalogs_page(catalog_path))
+                            .title(res::str::app_title())
+                            .destination(nav_destination)
+                    }),
+                item(Tab::Updates, res::str::tab_updates())
+                    .icon(res::images::tab_updates)
+                    .page(move || {
+                        nav_stack(updates_path, updates::updates_page(updates_path))
+                            .title(res::str::nav_updates())
+                            .destination(nav_destination)
+                    }),
+                item(Tab::Settings, res::str::tab_settings())
+                    .icon(res::images::tab_settings)
+                    .page(settings::settings_page),
+            ))
+            .id(day::id!(tabs));
+
+        // The install overlay floats above everything whenever an install is in progress.
+        let install = state::install_signal();
+        zstack((
+            tabs,
+            when(
+                move || install.get().is_some(),
+                install_sheet::install_sheet,
+            ),
+        ))
+    })
 }
 
 // Mobile entry points — each macro expands to nothing off its own platform.
-day::ios_main!("App Fair", root);
-day::android_main!(root);
+day::day_start_ios!("App Fair", root);
+day::day_start_android!(root);

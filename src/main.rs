@@ -1,11 +1,8 @@
 fn main() {
+    // The generated options carry the locale catalog, the localized title and the version; the
+    // size is a desktop-appropriate default — mobile fills the screen regardless.
     day::launch(
-        day::WindowOptions {
-            title: "App Fair".into(),
-            // A desktop-appropriate default size; mobile fills the screen regardless.
-            size: day::prelude::Size::new(960.0, 640.0),
-            ..Default::default()
-        },
-        app_fair::root,
+        dayapp::res::window_options().size(960.0, 640.0),
+        dayapp::root,
     );
 }

@@ -62,22 +62,70 @@ pub enum InstallPhase {
     Cancelled,
 }
 
-struct State {
+/// What ONE WINDOW is browsing (docs/state.md): its search text, its category and catalog
+/// filters, and its sort order. Per-window because that is what a second window is for — one
+/// showing Games while another searches, each keeping its own place.
+#[derive(Clone, Copy)]
+pub struct Scene {
     query: Signal<String>,
     category: Signal<Option<String>>,
     /// The catalog to browse (`None` = all enabled catalogs).
     repo_filter: Signal<Option<i64>>,
     /// The catalog list's sort order (the sort drop-down).
     sort: Signal<SortOrder>,
+}
+
+impl Ambient for Scene {
+    fn create() -> Self {
+        Scene {
+            query: Signal::new(String::new()),
+            category: Signal::new(None),
+            repo_filter: Signal::new(None),
+            sort: Signal::new(SortOrder::default()),
+        }
+    }
+}
+
+/// This window's browse state — the ambient one while a piece BUILDS, the FOCUSED window's when
+/// a command runs later from a handler that belongs to no scope (docs/state.md).
+fn scene() -> Scene {
+    Scene::try_ambient()
+        .or_else(Scene::focused)
+        .expect("no window is open, so there is no Scene to act on")
+}
+
+/// The APP's state: one catalog database, one sync, one install at a time. Every window reads
+/// the same — a download in one window is the same download in the other.
+#[derive(Clone, Copy)]
+struct AppState {
     catalog_version: Signal<u64>,
     sync: Signal<SyncUi>,
     install: Signal<Option<InstallUi>>,
 }
 
-thread_local! {
-    static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
-    /// Main-thread SQLite handle, opened once.
-    static DB: RefCell<Option<SqliteConnection>> = const { RefCell::new(None) };
+impl Ambient for AppState {
+    fn create() -> Self {
+        let st = AppState {
+            catalog_version: Signal::new(0),
+            sync: Signal::new(SyncUi::Idle),
+            install: Signal::new(None),
+        };
+        // Cross-thread write handles for the sync and install workers.
+        let _ = SYNC_SETTER.set(st.sync.setter());
+        let _ = INSTALL_SETTER.set(st.install.setter());
+        let _ = CATALOG_SETTER.set(st.catalog_version.setter());
+        st
+    }
+}
+
+/// The main-thread SQLite handle, opened once for the process. A connection, not state.
+#[derive(Clone)]
+struct Database(std::rc::Rc<RefCell<Option<SqliteConnection>>>);
+
+impl Ambient for Database {
+    fn create() -> Self {
+        Database(std::rc::Rc::new(RefCell::new(None)))
+    }
 }
 
 // Cross-thread write handles, populated at init on the main thread.
@@ -98,48 +146,26 @@ struct InFlight {
 }
 static IN_FLIGHT: Mutex<Option<InFlight>> = Mutex::new(None);
 
-fn with_state<R>(f: impl FnOnce(&State) -> R) -> R {
-    STATE.with(|cell| {
-        if cell.borrow().is_none() {
-            // Detached scope: these signals must outlive the page that first reads them.
-            let st = Scope::detached().enter(|| State {
-                query: Signal::new(String::new()),
-                category: Signal::new(None),
-                repo_filter: Signal::new(None),
-                sort: Signal::new(SortOrder::default()),
-                catalog_version: Signal::new(0),
-                sync: Signal::new(SyncUi::Idle),
-                install: Signal::new(None),
-            });
-            let _ = SYNC_SETTER.set(st.sync.setter());
-            let _ = INSTALL_SETTER.set(st.install.setter());
-            let _ = CATALOG_SETTER.set(st.catalog_version.setter());
-            *cell.borrow_mut() = Some(st);
-        }
-        f(cell.borrow().as_ref().unwrap())
-    })
-}
-
 pub fn query() -> Signal<String> {
-    with_state(|s| s.query)
+    scene().query
 }
 pub fn category() -> Signal<Option<String>> {
-    with_state(|s| s.category)
+    scene().category
 }
 pub fn repo_filter() -> Signal<Option<i64>> {
-    with_state(|s| s.repo_filter)
+    scene().repo_filter
 }
 pub fn sort_order() -> Signal<SortOrder> {
-    with_state(|s| s.sort)
+    scene().sort
 }
 pub fn catalog_version() -> Signal<u64> {
-    with_state(|s| s.catalog_version)
+    AppState::app().catalog_version
 }
 pub fn sync_signal() -> Signal<SyncUi> {
-    with_state(|s| s.sync)
+    AppState::app().sync
 }
 pub fn install_signal() -> Signal<Option<InstallUi>> {
-    with_state(|s| s.install)
+    AppState::app().install
 }
 
 /// Whether a download/install is mid-flight (so an auto-update batch shouldn't barge in).
@@ -162,7 +188,9 @@ pub fn db_path() -> PathBuf {
 /// Run a closure against the main-thread SQLite connection, opening it on first use. Diesel takes
 /// `&mut` for queries, so the closure does too.
 pub fn with_db<R>(f: impl FnOnce(&mut SqliteConnection) -> R) -> R {
-    DB.with(|cell| {
+    let handle = Database::app().0;
+    {
+        let cell = &handle;
         if cell.borrow().is_none() {
             let path = db_path();
             if let Some(parent) = path.parent() {
@@ -180,11 +208,11 @@ pub fn with_db<R>(f: impl FnOnce(&mut SqliteConnection) -> R) -> R {
                     }
                     *cell.borrow_mut() = Some(conn);
                 }
-                Err(e) => eprintln!("app-fair: db open failed: {e}"),
+                Err(e) => error!("db open failed: {e}"),
             }
         }
         f(cell.borrow_mut().as_mut().expect("db"))
-    })
+    }
 }
 
 pub fn search_apps() -> Vec<AppSummary> {
@@ -213,9 +241,22 @@ pub fn search_apps() -> Vec<AppSummary> {
 /// The installed-package list tagged with the install generation it was enumerated at.
 type InstalledPkgsCache = Option<(u64, Vec<(String, i64)>)>;
 
-thread_local! {
-    /// Cached `platform::installed_packages()` result — the slow JNI enumeration.
-    static INSTALLED_PKGS: RefCell<InstalledPkgsCache> = const { RefCell::new(None) };
+/// Cached `platform::installed_packages()` result — the slow JNI enumeration. App-wide: what
+/// the device has installed is a fact about the device.
+#[derive(Clone, Default)]
+struct InstalledPkgs(std::rc::Rc<RefCell<InstalledPkgsCache>>);
+
+impl Ambient for InstalledPkgs {
+    fn create() -> Self {
+        InstalledPkgs::default()
+    }
+}
+
+impl InstalledPkgs {
+    /// The same shape the `thread_local!` accessor had, so every call site below reads the same.
+    fn with<R>(f: impl FnOnce(&RefCell<InstalledPkgsCache>) -> R) -> R {
+        f(&InstalledPkgs::app().0)
+    }
 }
 
 /// Bumps only when the set of installed packages can have changed (an install or uninstall). The
@@ -234,7 +275,7 @@ pub fn bump_installed() {
 /// thread. Only an actual install/uninstall invalidates it.
 fn cached_installed_packages() -> Vec<(String, i64)> {
     let generation = INSTALL_GEN.load(Ordering::Relaxed);
-    if let Some(cached) = INSTALLED_PKGS.with(|cell| {
+    if let Some(cached) = InstalledPkgs::with(|cell| {
         cell.borrow()
             .as_ref()
             .filter(|(g, _)| *g == generation)
@@ -243,7 +284,7 @@ fn cached_installed_packages() -> Vec<(String, i64)> {
         return cached;
     }
     let installed = platform::installed_packages();
-    INSTALLED_PKGS.with(|cell| *cell.borrow_mut() = Some((generation, installed.clone())));
+    InstalledPkgs::with(|cell| *cell.borrow_mut() = Some((generation, installed.clone())));
     installed
 }
 

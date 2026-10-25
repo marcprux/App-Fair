@@ -3,8 +3,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use day::async_image::ContentMode;
 use day::prelude::*;
-use day_piece_remote_image::ContentMode;
 
 use crate::model::{AppDetail, AppSummary};
 use crate::state;
@@ -63,7 +63,7 @@ fn updatable_details() -> Vec<AppDetail> {
         .collect()
 }
 
-pub fn updates_page(path: Signal<Vec<Nav>>) -> AnyPiece {
+pub fn updates_page(path: Signal<Vec<Nav>>) -> impl Piece {
     let version = state::catalog_version();
 
     // When auto-download is on, kick off the batch update once per launch as soon as the catalog
@@ -99,7 +99,7 @@ pub fn updates_page(path: Signal<Vec<Nav>>) -> AnyPiece {
     .font(Font::Footnote)
     .color(MUTED)
     .grow_w()
-    .id("updates-summary");
+    .id(day::id!(updates_summary));
 
     // "Update all" appears only while updates are pending; it installs them one after another.
     let update_all = when(
@@ -111,21 +111,22 @@ pub fn updates_page(path: Signal<Vec<Nav>>) -> AnyPiece {
             button(crate::res::str::btn_update_all())
                 .prominent()
                 .action(move || state::start_updates(updatable_details()))
-                .id("update-all")
-                .any()
+                .id(day::id!(update_all))
         },
     );
 
-    let header = row((summary, update_all.any()))
+    let header = row((summary, update_all))
         .align(VAlign::Center)
-        .spacing(8.0);
+        .spacing(Space::S);
 
     let list = list(
-        move || {
-            version.get();
-            rows()
-        },
-        |i: &Installed| i.app.pkg.clone(),
+        items(
+            move || {
+                version.get();
+                rows()
+            },
+            |i: &Installed| i.app.pkg.clone(),
+        ),
         update_row,
     )
     .row_height(RowHeight::Uniform(72.0))
@@ -141,20 +142,16 @@ pub fn updates_page(path: Signal<Vec<Nav>>) -> AnyPiece {
             );
         }
     })
-    // id BEFORE grow so it lands on the list node (with the selection handler), not the wrapper.
-    .id("updates-list")
+    .id(day::id!(updates_list))
     .grow();
 
     column((header, list))
         .spacing(10.0)
         .align(HAlign::Leading)
-        .padding(12.0)
-        .any()
+        .padding(Space::M)
 }
 
-fn update_row(slot: ItemSlot<Installed, String>) -> AnyPiece {
-    let key = slot.key();
-
+fn update_row(slot: ItemSlot<Installed, String>) -> impl Piece {
     let icon = crate::icons::row_icon(move || slot.field(|i| i.app.icon_url()))
         .rounded(10.0)
         .content_mode(ContentMode::Fit)
@@ -164,31 +161,24 @@ fn update_row(slot: ItemSlot<Installed, String>) -> AnyPiece {
     // Right column: an accent "Update →" line when a newer version exists, else "Up to date".
     // Two colored labels toggled reactively (label colors aren't reactive), so a recycled row's
     // status updates on rebind.
-    let status = column((
-        when(
-            move || slot.with(|i| i.updatable()),
-            move || {
-                label(move || {
-                    slot.with(|i| {
-                        crate::res::str::status_update(i.app.version_name.clone()).format()
-                    })
-                })
-                .font(Font::Caption)
-                .color(UPDATE)
-            },
-        ),
-        when(
-            move || slot.with(|i| !i.updatable()),
-            || {
-                label(crate::res::str::status_up_to_date())
-                    .font(Font::Caption)
-                    .color(OK)
-            },
-        ),
-    ));
+    let status = when(
+        move || slot.with(|i| i.updatable()),
+        move || {
+            label(move || {
+                slot.with(|i| crate::res::str::status_update(i.app.version_name.clone()).format())
+            })
+            .font(Font::Caption)
+            .color(UPDATE)
+        },
+    )
+    .otherwise(|| {
+        label(crate::res::str::status_up_to_date())
+            .font(Font::Caption)
+            .color(OK)
+    });
 
     row((
-        icon.any(),
+        icon,
         column((
             label(move || slot.field(|i| i.app.name.clone())).font(Font::Body),
             label(move || slot.field(|i| i.app.summary.clone()))
@@ -200,9 +190,8 @@ fn update_row(slot: ItemSlot<Installed, String>) -> AnyPiece {
         .grow_w(),
         status,
     ))
-    .spacing(12.0)
+    .spacing(Space::M)
     .align(VAlign::Center)
     .padding(Insets::symmetric(6.0, 8.0))
-    .id_keyed("update-row", key)
-    .any()
+    .id_of(move || day::id!(update_row, slot.key()))
 }

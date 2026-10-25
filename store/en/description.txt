@@ -1,0 +1,19 @@
+App Fair is an open, privacy-respecting app store. Browse free and open-source apps, read their details, and install or update them straight from the repositories you trust — no account, no tracking, no ads.
+
+FEATURES
+
+• Browse F-Droid-compatible catalogs, with search, categories and sorting
+• Read what an app actually asks for — permissions, anti-features and its signing key — before installing
+• Install and update through Android's own installer, after the download is verified against the checksum the catalog published
+• Add, enable, disable and remove catalogs: the sources are yours to choose
+• Filter out anti-features you do not want to see
+
+PRIVACY
+
+App Fair has no account and collects nothing about you. It talks to the catalogs you have enabled and to nothing else.
+
+HOW INSTALLS WORK
+
+App Fair does not install anything silently. It downloads the package, checks it against the catalog's published checksum, and hands it to the system installer — the same confirmation you would see installing any app from any source.
+
+Open source: github.com/marcprux/App-Fair

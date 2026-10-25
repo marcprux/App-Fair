@@ -2,6 +2,7 @@
 //! hands it to Android's PackageInstaller through the `platform` bridge. The install result comes
 //! back asynchronously via the JNI callback in `platform`, which updates the install sheet.
 
+use day::prelude::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -11,14 +12,27 @@ use crate::model::AppDetail;
 use crate::net::{self, Progress};
 use crate::state::{self, InstallPhase, InstallUi};
 
-thread_local! {
-    /// The current download's cancel handle, so the sheet's Cancel button can stop it.
-    static CANCEL: std::cell::RefCell<Option<Progress>> = const { std::cell::RefCell::new(None) };
+/// The current download's cancel handle, so the sheet's Cancel button can stop it. App-wide:
+/// App Fair installs one app at a time, whichever window started it.
+#[derive(Clone, Default)]
+struct Cancel(std::rc::Rc<std::cell::RefCell<Option<Progress>>>);
+
+impl Ambient for Cancel {
+    fn create() -> Self {
+        Cancel::default()
+    }
+}
+
+impl Cancel {
+    /// The same shape the `thread_local!` accessor had, so every call site below reads the same.
+    fn with<R>(f: impl FnOnce(&std::cell::RefCell<Option<Progress>>) -> R) -> R {
+        f(&Cancel::app().0)
+    }
 }
 
 /// Cancel a download in progress (no effect once the system installer has taken over).
 pub fn cancel() {
-    CANCEL.with(|c| {
+    Cancel::with(|c| {
         if let Some(p) = c.borrow().as_ref() {
             p.cancel();
         }
@@ -75,7 +89,7 @@ pub fn start(app: &AppDetail) {
     }));
 
     let progress = Progress::new();
-    CANCEL.with(|c| *c.borrow_mut() = Some(progress.clone()));
+    Cancel::with(|c| *c.borrow_mut() = Some(progress.clone()));
 
     thread::spawn(move || {
         let finished = Arc::new(AtomicBool::new(false));

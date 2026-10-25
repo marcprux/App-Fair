@@ -22,10 +22,10 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>org.appfair.AppFair</string>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>appfair</string>
+				<string>$(DAY_URL_SCHEME)</string>
 			</array>
 		</dict>
 	</array>
@@ -33,13 +33,18 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>UIAppFonts</key>
-	<array>
-		<string>DayPieces_DayPieces.bundle/fonts/Bungee-Regular.ttf</string>
-		<string>DayPieces_DayPieces.bundle/fonts/Pacifico-Regular.ttf</string>
-		<string>DayPieces_DayPieces.bundle/fonts/SpecialElite-Regular.ttf</string>
-	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>DayWindowMinHeight</key>
+	<string>$(DAY_WINDOW_MIN_HEIGHT)</string>
+	<key>DayWindowMinWidth</key>
+	<string>$(DAY_WINDOW_MIN_WIDTH)</string>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
 </dict>
 </plist>

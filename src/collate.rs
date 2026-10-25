@@ -7,16 +7,29 @@
 //! "a"/"o". A collator is built once per locale and cached on the calling thread (the list re-sorts
 //! on every catalog change and keystroke, so rebuilding it each time would be wasteful).
 
+use day::prelude::*;
 use std::cell::RefCell;
 
 use icu_collator::options::{CollatorOptions, Strength};
 use icu_collator::{CollatorBorrowed, CollatorPreferences};
 use icu_locale_core::Locale;
 
-thread_local! {
-    /// The collator for the last locale asked for, kept so repeated sorts in one locale reuse it.
-    static COLLATOR: RefCell<Option<(String, CollatorBorrowed<'static>)>> =
-        const { RefCell::new(None) };
+/// The collator for the last locale asked for, kept so repeated sorts in one locale reuse it.
+/// App-wide: a memo over the process locale, not something a window owns.
+#[derive(Clone, Default)]
+struct Collator(std::rc::Rc<RefCell<Option<(String, CollatorBorrowed<'static>)>>>);
+
+impl Ambient for Collator {
+    fn create() -> Self {
+        Collator::default()
+    }
+}
+
+impl Collator {
+    /// The same shape the `thread_local!` accessor had, so every call site below reads the same.
+    fn with<R>(f: impl FnOnce(&RefCell<Option<(String, CollatorBorrowed<'static>)>>) -> R) -> R {
+        f(&Collator::app().0)
+    }
 }
 
 /// Build a collator for a BCP-47 tag, falling back to the Unicode root order for an unknown tag or a
@@ -40,7 +53,7 @@ fn build(tag: &str) -> CollatorBorrowed<'static> {
 
 /// Sort `items` alphabetically by `key`, using `locale`'s collation.
 pub fn sort_by_name<T>(locale: &str, items: &mut [T], key: impl Fn(&T) -> &str) {
-    COLLATOR.with(|cell| {
+    Collator::with(|cell| {
         let mut slot = cell.borrow_mut();
         if slot.as_ref().map(|(tag, _)| tag.as_str()) != Some(locale) {
             *slot = Some((locale.to_string(), build(locale)));

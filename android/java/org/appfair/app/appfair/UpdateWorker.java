@@ -2,7 +2,7 @@
 // thread — a Java thread that holds the app classloader, so it can call DayInstaller and the Rust
 // native method directly. Rust syncs every enabled catalog and returns how many installed apps now
 // have an update; if any, we post a low-priority notification whose tap opens App Fair. Scheduled
-// from DayInstaller.scheduleUpdateChecks(). No day-android edits.
+// from DayInstaller.scheduleUpdateChecks(). No day-toolkit-material edits.
 package org.appfair.app.appfair;
 
 import android.app.Notification;

@@ -27,12 +27,24 @@ above everything.
 
 ## Build and run
 
-Day compiles one backend per binary, so choose a target. The Day CLI supplies the right feature:
+`day launch --git` clones this repo, builds it, and runs it — no checkout needed. App Fair installs
+Android packages, so name that target rather than taking the desktop default:
 
 ```sh
-day doctor                        # check the toolchains for your targets
-day launch -p android-mdc      # build + run on a device/emulator
-day launch -p android-mdc --script dayscript/ci.yaml --env APP_FAIR_MOCK=1   # scripted, offline
+cargo install day-cli
+day doctor                                             # what's installed, what's missing
+day launch --git https://github.com/marcprux/App-Fair.git -p android-material
+```
+
+`day doctor` prints the fix for anything it can't find. `day launch --git` prints where it put the
+checkout, so you can `cd` there and edit the code.
+
+From inside a clone, name the target directly — Day compiles one backend per binary, and the Day
+CLI supplies the right feature:
+
+```sh
+day launch -p android-material      # build + run on a device/emulator
+day launch -p android-material --script dayscript/ci.yaml --env APP_FAIR_MOCK=1   # scripted, offline
 ```
 
 ## Release
@@ -43,7 +55,7 @@ Signing keys are referenced from `Day.toml` (`[signing.android]`) via environmen
 export DAY_ANDROID_KEYSTORE=/path/to/keystore.jks DAY_ANDROID_KEY_ALIAS=app \
        DAY_KS_PASS=… DAY_KEY_PASS=…
 day sign --check                               # confirm the config resolves
-day pack -p android-mdc --profile release   # signed app-fair-<version>.apk + .aab in build/day/dist/
+day pack -p android-material --profile release   # signed app-fair-<version>-android-material.apk + .aab in build/day/dist/
 ```
 
 Play Store listing metadata and the `supply` dry run live in [`android/fastlane/`](android/fastlane).

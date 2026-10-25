@@ -1,11 +1,39 @@
 //! The platform boundary. On Android these call the `DayInstaller` Java bridge through
-//! day-android's cached JVM/Context; everywhere else (the desktop mock build) they are stubs so
+//! day-platform-android's cached JVM/Context; everywhere else (the desktop mock build) they are stubs so
 //! the app still compiles and the UI can be exercised.
 
 use std::path::PathBuf;
 
 #[cfg(target_os = "android")]
-const INSTALLER_CLASS: &str = "org/appfair/app/appfair/DayInstaller";
+use day_platform_android::{java, java_string, with_env};
+
+#[cfg(target_os = "android")]
+day_platform_android::java_class! {
+    DayInstaller => org.appfair.app.appfair.DayInstaller,
+    methods {
+        static fn filesDir() -> JString,
+        static fn installedVersion(pkg: JString) -> jlong,
+        static fn launchApp(pkg: JString) -> JString,
+        static fn uninstall(pkg: JString) -> JString,
+        static fn deviceSdk() -> jint,
+        static fn deviceAbis() -> JString,
+        static fn verifyEntryJar(path: JString, fingerprint: JString) -> JString,
+        static fn apkSignerSha256(path: JString) -> JString,
+        static fn installedPackages() -> JString,
+        static fn permissionInfo(name: JString) -> JString,
+        static fn install(path: JString, label: JString),
+        static fn scheduleUpdateChecks(),
+    },
+}
+
+#[cfg(target_os = "android")]
+day_platform_android::java_class! {
+    Locale => java.util.Locale,
+    methods {
+        static fn getDefault() -> java.util.Locale,
+        fn toLanguageTag() -> JString,
+    },
+}
 
 /// The app's private data directory, resolved once and cached. JNI `FindClass` for app classes
 /// only works on the UI thread (a background thread gets the system classloader), so this must be
@@ -14,21 +42,10 @@ const INSTALLER_CLASS: &str = "org/appfair/app/appfair/DayInstaller";
 pub fn data_dir() -> PathBuf {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        use day_android::{DayEnv, as_jstring, with_env};
-        with_env(|env| {
-            let obj = env
-                .dcall_static(INSTALLER_CLASS, "filesDir", "()Ljava/lang/String;", &[])
-                .ok()?
-                .l()
-                .ok()?;
-            if obj.is_null() {
-                return None;
-            }
-            env.dstr(&as_jstring(obj)).ok()
-        })
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/data/local/tmp/app-fair"))
+        with_env(|env| java_string(env, DayInstaller::filesDir))
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/data/local/tmp/app-fair"))
     })
     .clone()
 }
@@ -41,22 +58,11 @@ pub fn data_dir() -> PathBuf {
 /// The installed versionCode for `pkg`, or `None` when the app is not installed.
 #[cfg(target_os = "android")]
 pub fn installed_version(pkg: &str) -> Option<i64> {
-    use day_android::jni::objects::JValue;
-    use day_android::{DayEnv, with_env};
-    with_env(|env| {
-        let p = env.new_string(pkg).ok()?;
-        let code = env
-            .dcall_static(
-                INSTALLER_CLASS,
-                "installedVersion",
-                "(Ljava/lang/String;)J",
-                &[JValue::Object(&p)],
-            )
-            .ok()?
-            .j()
-            .ok()?;
-        (code >= 0).then_some(code)
+    java(|env| {
+        let pkg = env.new_string(pkg)?;
+        DayInstaller::installedVersion(env, &pkg)
     })
+    .filter(|code| *code >= 0)
 }
 
 #[cfg(not(target_os = "android"))]
@@ -68,24 +74,14 @@ pub fn installed_version(_pkg: &str) -> Option<i64> {
 /// (no launcher activity, no context, or a thrown exception) for the caller to show in a dialog.
 #[cfg(target_os = "android")]
 pub fn launch_app(pkg: &str) -> Result<(), String> {
-    use day_android::jni::objects::JValue;
-    use day_android::{DayEnv, as_jstring, with_env};
-    let msg = with_env(|env| {
-        let p = env.new_string(pkg).ok()?;
-        let obj = env
-            .dcall_static(
-                INSTALLER_CLASS,
-                "launchApp",
-                "(Ljava/lang/String;)Ljava/lang/String;",
-                &[JValue::Object(&p)],
-            )
-            .ok()?
-            .l()
-            .ok()?;
-        if obj.is_null() {
-            return Some(String::new());
+    let msg = java(|env| {
+        let pkg = env.new_string(pkg)?;
+        let message = DayInstaller::launchApp(env, &pkg)?;
+        if message.is_null() {
+            Ok(String::new())
+        } else {
+            day_platform_android::string_of(env, &message)
         }
-        env.dstr(&as_jstring(obj)).ok()
     });
     match msg {
         Some(m) if m.is_empty() => Ok(()),
@@ -104,24 +100,14 @@ pub fn launch_app(_pkg: &str) -> Result<(), String> {
 /// on the UI thread (called from a button action), so it reaches the app classloader directly.
 #[cfg(target_os = "android")]
 pub fn uninstall(pkg: &str) -> Result<(), String> {
-    use day_android::jni::objects::JValue;
-    use day_android::{DayEnv, as_jstring, with_env};
-    let msg = with_env(|env| {
-        let p = env.new_string(pkg).ok()?;
-        let obj = env
-            .dcall_static(
-                INSTALLER_CLASS,
-                "uninstall",
-                "(Ljava/lang/String;)Ljava/lang/String;",
-                &[JValue::Object(&p)],
-            )
-            .ok()?
-            .l()
-            .ok()?;
-        if obj.is_null() {
-            return Some(String::new());
+    let msg = java(|env| {
+        let pkg = env.new_string(pkg)?;
+        let message = DayInstaller::uninstall(env, &pkg)?;
+        if message.is_null() {
+            Ok(String::new())
+        } else {
+            day_platform_android::string_of(env, &message)
         }
-        env.dstr(&as_jstring(obj)).ok()
     });
     match msg {
         Some(m) if m.is_empty() => Ok(()),
@@ -141,15 +127,9 @@ pub fn uninstall(_pkg: &str) -> Result<(), String> {
 pub fn device_sdk() -> i64 {
     static SDK: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     *SDK.get_or_init(|| {
-        use day_android::{DayEnv, with_env};
-        with_env(|env| {
-            env.dcall_static(INSTALLER_CLASS, "deviceSdk", "()I", &[])
-                .ok()?
-                .i()
-                .ok()
-                .map(|v| v as i64)
-        })
-        .unwrap_or(0)
+        java(|env| DayInstaller::deviceSdk(env))
+            .map(i64::from)
+            .unwrap_or(0)
     })
 }
 
@@ -165,25 +145,14 @@ pub fn device_sdk() -> i64 {
 pub fn device_abis() -> Vec<String> {
     static ABIS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     ABIS.get_or_init(|| {
-        use day_android::{DayEnv, as_jstring, with_env};
-        with_env(|env| {
-            let obj = env
-                .dcall_static(INSTALLER_CLASS, "deviceAbis", "()Ljava/lang/String;", &[])
-                .ok()?
-                .l()
-                .ok()?;
-            if obj.is_null() {
-                return None;
-            }
-            env.dstr(&as_jstring(obj)).ok()
-        })
-        .map(|s| {
-            s.split('\t')
-                .filter(|x| !x.is_empty())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default()
+        with_env(|env| java_string(env, DayInstaller::deviceAbis))
+            .map(|s| {
+                s.split('\t')
+                    .filter(|x| !x.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default()
     })
     .clone()
 }
@@ -221,25 +190,12 @@ pub fn verify_entry_jar(jar_bytes: &[u8], fingerprint: &str) -> Option<String> {
     let path_str = path.to_string_lossy().to_string();
     let fp = fingerprint.to_string();
     let result = on_main_blocking(move || {
-        use day_android::jni::objects::JValue;
-        use day_android::{DayEnv, as_jstring, with_env};
         with_env(|env| {
-            let p = env.new_string(&path_str).ok()?;
-            let f = env.new_string(&fp).ok()?;
-            let obj = env
-                .dcall_static(
-                    INSTALLER_CLASS,
-                    "verifyEntryJar",
-                    "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
-                    &[JValue::Object(&p), JValue::Object(&f)],
-                )
-                .ok()?
-                .l()
-                .ok()?;
-            if obj.is_null() {
-                return None;
-            }
-            env.dstr(&as_jstring(obj)).ok()
+            java_string(env, |env| {
+                let path = env.new_string(&path_str)?;
+                let fingerprint = env.new_string(&fp)?;
+                DayInstaller::verifyEntryJar(env, &path, &fingerprint)
+            })
         })
     });
     let _ = std::fs::remove_file(&path);
@@ -257,24 +213,11 @@ pub fn verify_entry_jar(_jar_bytes: &[u8], _fingerprint: &str) -> Option<String>
 pub fn apk_signer_sha256(apk_path: &str) -> String {
     let path = apk_path.to_string();
     on_main_blocking(move || {
-        use day_android::jni::objects::JValue;
-        use day_android::{DayEnv, as_jstring, with_env};
         with_env(|env| {
-            let p = env.new_string(&path).ok()?;
-            let obj = env
-                .dcall_static(
-                    INSTALLER_CLASS,
-                    "apkSignerSha256",
-                    "(Ljava/lang/String;)Ljava/lang/String;",
-                    &[JValue::Object(&p)],
-                )
-                .ok()?
-                .l()
-                .ok()?;
-            if obj.is_null() {
-                return None;
-            }
-            env.dstr(&as_jstring(obj)).ok()
+            java_string(env, |env| {
+                let path = env.new_string(&path)?;
+                DayInstaller::apkSignerSha256(env, &path)
+            })
         })
     })
     .flatten()
@@ -295,28 +238,12 @@ pub fn device_locale() -> String {
     static LOCALE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     LOCALE
         .get_or_init(|| {
-            use day_android::{DayEnv, as_jstring, with_env};
             with_env(|env| {
-                // java.util.Locale.getDefault().toLanguageTag()
-                let locale = env
-                    .dcall_static(
-                        "java/util/Locale",
-                        "getDefault",
-                        "()Ljava/util/Locale;",
-                        &[],
-                    )
-                    .ok()?
-                    .l()
-                    .ok()?;
-                let tag = env
-                    .dcall(&locale, "toLanguageTag", "()Ljava/lang/String;", &[])
-                    .ok()?
-                    .l()
-                    .ok()?;
-                if tag.is_null() {
-                    return None;
-                }
-                env.dstr(&as_jstring(tag)).ok()
+                java_string(env, |env| {
+                    let locale = Locale::getDefault(env)?;
+                    let locale = day_platform_android::downcast::<Locale>(env, &locale)?;
+                    locale.toLanguageTag(env)
+                })
             })
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "en-US".to_string())
@@ -332,24 +259,7 @@ pub fn device_locale() -> String {
 /// Every user-installed app as `(pkg, versionCode)`. Empty off Android.
 #[cfg(target_os = "android")]
 pub fn installed_packages() -> Vec<(String, i64)> {
-    use day_android::{DayEnv, as_jstring, with_env};
-    let raw = with_env(|env| {
-        let obj = env
-            .dcall_static(
-                INSTALLER_CLASS,
-                "installedPackages",
-                "()Ljava/lang/String;",
-                &[],
-            )
-            .ok()?
-            .l()
-            .ok()?;
-        if obj.is_null() {
-            return None;
-        }
-        env.dstr(&as_jstring(obj)).ok()
-    })
-    .unwrap_or_default();
+    let raw = with_env(|env| java_string(env, DayInstaller::installedPackages)).unwrap_or_default();
     raw.lines()
         .filter_map(|line| {
             let (pkg, code) = line.split_once('\t')?;
@@ -367,24 +277,11 @@ pub fn installed_packages() -> Vec<(String, i64)> {
 /// tidied form of the raw name; the description is empty when the platform doesn't define one.
 #[cfg(target_os = "android")]
 pub fn permission_info(name: &str) -> (String, String) {
-    use day_android::jni::objects::JValue;
-    use day_android::{DayEnv, as_jstring, with_env};
     let raw = with_env(|env| {
-        let n = env.new_string(name).ok()?;
-        let obj = env
-            .dcall_static(
-                INSTALLER_CLASS,
-                "permissionInfo",
-                "(Ljava/lang/String;)Ljava/lang/String;",
-                &[JValue::Object(&n)],
-            )
-            .ok()?
-            .l()
-            .ok()?;
-        if obj.is_null() {
-            return None;
-        }
-        env.dstr(&as_jstring(obj)).ok()
+        java_string(env, |env| {
+            let name = env.new_string(name)?;
+            DayInstaller::permissionInfo(env, &name)
+        })
     });
     match raw {
         Some(s) => {
@@ -431,19 +328,12 @@ pub fn tidy_permission(name: &str) -> String {
 pub fn install_apk(path: &str, label: &str) {
     let (path, label) = (path.to_string(), label.to_string());
     day_reactive::on_main(move || {
-        use day_android::jni::objects::JValue;
-        use day_android::{DayEnv, with_env};
-        with_env(|env| {
-            let (Ok(p), Ok(l)) = (env.new_string(&path), env.new_string(&label)) else {
+        java(|env| {
+            let (Ok(path), Ok(label)) = (env.new_string(&path), env.new_string(&label)) else {
                 crate::state::on_native_install_status(1, Some("bad path".into()));
-                return;
+                return Ok(());
             };
-            let _ = env.dcall_static(
-                INSTALLER_CLASS,
-                "install",
-                "(Ljava/lang/String;Ljava/lang/String;)V",
-                &[JValue::Object(&p), JValue::Object(&l)],
-            );
+            DayInstaller::install(env, &path, &label)
         });
     });
 }
@@ -454,7 +344,7 @@ pub fn install_apk(_path: &str, _label: &str) {
 }
 
 /// PackageInstaller result callback, invoked by `DayInstaller`'s BroadcastReceiver. Mirrors the
-/// pattern in `day::android_main!`: the FFI-safe `EnvUnowned` is upgraded to a real `Env`, and the
+/// pattern in `day::day_start_android!`: the FFI-safe `EnvUnowned` is upgraded to a real `Env`, and the
 /// body is wrapped so a panic never crosses the JNI boundary.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
@@ -476,10 +366,7 @@ pub extern "system" fn Java_org_appfair_app_appfair_DayInstaller_nativeInstallRe
 #[cfg(target_os = "android")]
 pub fn schedule_update_checks() {
     day_reactive::on_main(|| {
-        use day_android::{DayEnv, with_env};
-        with_env(|env| {
-            let _ = env.dcall_static(INSTALLER_CLASS, "scheduleUpdateChecks", "()V", &[]);
-        });
+        java(|env| DayInstaller::scheduleUpdateChecks(env));
     });
 }
 

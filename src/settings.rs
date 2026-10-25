@@ -27,18 +27,18 @@ pub const FILTERABLE_ANTI: &[(&str, &str)] = &[
 
 /// Whether App Fair checks catalogs for updates on launch (default on).
 pub fn sync_on_launch() -> bool {
-    day_part_prefs::get(PREF_SYNC_ON_LAUNCH).as_deref() != Some("0")
+    day_part_preferences::get(PREF_SYNC_ON_LAUNCH).as_deref() != Some("0")
 }
 
 /// Whether App Fair downloads available updates automatically (still confirms each install). Off by
 /// default (#8).
 pub fn auto_download() -> bool {
-    day_part_prefs::get(PREF_AUTO_DOWNLOAD).as_deref() == Some("1")
+    day_part_preferences::get(PREF_AUTO_DOWNLOAD).as_deref() == Some("1")
 }
 
 /// Anti-feature keys the user chose to hide from browse/search (#13).
 pub fn excluded_anti_features() -> Vec<String> {
-    day_part_prefs::get(PREF_EXCLUDE_ANTI)
+    day_part_preferences::get(PREF_EXCLUDE_ANTI)
         .map(|s| {
             s.split(',')
                 .filter(|x| !x.is_empty())
@@ -54,7 +54,7 @@ fn set_anti_excluded(key: &str, excluded: bool) {
     if excluded {
         keys.push(key.to_string());
     }
-    day_part_prefs::set(PREF_EXCLUDE_ANTI, &keys.join(","));
+    day_part_preferences::set(PREF_EXCLUDE_ANTI, &keys.join(","));
 }
 
 /// The localized display label for a filterable anti-feature key (#16). The `FILTERABLE_ANTI` list
@@ -74,15 +74,17 @@ fn anti_label(key: &str) -> LocalizedText {
     }
 }
 
-pub fn settings_page() -> AnyPiece {
+pub fn settings_page() -> impl Piece {
     let version = state::catalog_version();
 
     let repo_list = each(
-        move || {
-            version.get();
-            state::repos()
-        },
-        |r: &RepoRow| r.id,
+        items(
+            move || {
+                version.get();
+                state::repos()
+            },
+            |r: &RepoRow| r.id,
+        ),
         repo_row,
     );
 
@@ -90,7 +92,7 @@ pub fn settings_page() -> AnyPiece {
     watch(
         move || sync_pref.get(),
         move |on: &bool, _| {
-            day_part_prefs::set(PREF_SYNC_ON_LAUNCH, if *on { "1" } else { "0" });
+            day_part_preferences::set(PREF_SYNC_ON_LAUNCH, if *on { "1" } else { "0" });
         },
     );
 
@@ -98,13 +100,13 @@ pub fn settings_page() -> AnyPiece {
     watch(
         move || auto_pref.get(),
         move |on: &bool, _| {
-            day_part_prefs::set(PREF_AUTO_DOWNLOAD, if *on { "1" } else { "0" });
+            day_part_preferences::set(PREF_AUTO_DOWNLOAD, if *on { "1" } else { "0" });
         },
     );
 
     // One toggle per filterable anti-feature; flipping one re-filters the browse/search lists.
     let excluded = excluded_anti_features();
-    let anti_rows: Vec<AnyPiece> = FILTERABLE_ANTI
+    let anti_rows: Vec<_> = FILTERABLE_ANTI
         .iter()
         .map(|(key, _text)| {
             let key = *key;
@@ -118,11 +120,10 @@ pub fn settings_page() -> AnyPiece {
             );
             row((
                 label(anti_label(key)).font(Font::Body).grow_w(),
-                toggle(on).id_keyed("anti", key),
+                toggle(on).id(day::id!(anti, key)),
             ))
             .align(VAlign::Center)
             .spacing(10.0)
-            .any()
         })
         .collect();
 
@@ -134,7 +135,7 @@ pub fn settings_page() -> AnyPiece {
             label(crate::res::str::settings_catalogs_blurb())
                 .font(Font::Footnote)
                 .color(MUTED),
-            repo_list.any(),
+            repo_list,
             divider(),
             label(crate::res::str::settings_preferences()).font(Font::Headline),
             row((
@@ -147,7 +148,7 @@ pub fn settings_page() -> AnyPiece {
                 .spacing(2.0)
                 .align(HAlign::Leading)
                 .grow_w(),
-                toggle(sync_pref).id("pref-sync"),
+                toggle(sync_pref).id(day::id!(pref_sync)),
             ))
             .align(VAlign::Center)
             .spacing(10.0),
@@ -161,7 +162,7 @@ pub fn settings_page() -> AnyPiece {
                 .spacing(2.0)
                 .align(HAlign::Leading)
                 .grow_w(),
-                toggle(auto_pref).id("pref-auto-download"),
+                toggle(auto_pref).id(day::id!(pref_auto_download)),
             ))
             .align(VAlign::Center)
             .spacing(10.0),
@@ -187,7 +188,7 @@ pub fn settings_page() -> AnyPiece {
                         let _ = std::fs::remove_dir_all(&dir);
                         cleared.set(true);
                     })
-                    .id("clear-cache"),
+                    .id(day::id!(clear_cache)),
             ))
             .align(VAlign::Center)
             .spacing(10.0),
@@ -197,11 +198,9 @@ pub fn settings_page() -> AnyPiece {
                 label(crate::res::str::settings_hide_blurb())
                     .font(Font::Footnote)
                     .color(MUTED),
-                column(PieceVec(anti_rows))
-                    .spacing(8.0)
-                    .align(HAlign::Leading),
+                column(anti_rows).spacing(Space::S).align(HAlign::Leading),
             ))
-            .spacing(8.0)
+            .spacing(Space::S)
             .align(HAlign::Leading),
             divider(),
             column((
@@ -219,12 +218,11 @@ pub fn settings_page() -> AnyPiece {
         ))
         .spacing(14.0)
         .align(HAlign::Leading)
-        .padding(16.0),
+        .padding(Space::L),
     )
-    .any()
 }
 
-fn repo_row(slot: ItemSlot<RepoRow, i64>) -> AnyPiece {
+fn repo_row(slot: ItemSlot<RepoRow, i64>) -> impl Piece {
     let r = slot.get();
     let id = r.id;
     let address = r.address.clone();
@@ -256,10 +254,10 @@ fn repo_row(slot: ItemSlot<RepoRow, i64>) -> AnyPiece {
             })
             .font(Font::Body),
             label(move || {
-                crate::res::str::repo_row_meta(
-                    slot.field(|r| r.address.clone()),
-                    slot.field(|r| r.app_count),
-                )
+                crate::res::str::repo_row_meta(crate::res::str::RepoRowMeta {
+                    address: slot.field(|r| r.address.clone()),
+                    count: slot.field(|r| r.app_count),
+                })
                 .format()
             })
             .font(Font::Caption)
@@ -268,7 +266,7 @@ fn repo_row(slot: ItemSlot<RepoRow, i64>) -> AnyPiece {
         .spacing(2.0)
         .align(HAlign::Leading)
         .grow_w(),
-        toggle(enabled).id_keyed("repo-enabled", id),
+        toggle(enabled).id(day::id!(repo_enabled, id)),
         button(crate::res::str::btn_remove())
             .action(move || {
                 state::with_db(|conn| {
@@ -277,10 +275,9 @@ fn repo_row(slot: ItemSlot<RepoRow, i64>) -> AnyPiece {
                 crate::cache::remove_index(&address);
                 state::bump_catalog();
             })
-            .id_keyed("repo-remove", id),
+            .id(day::id!(repo_remove, id)),
     ))
     .spacing(10.0)
     .align(VAlign::Center)
     .padding(Insets::symmetric(0.0, 6.0))
-    .any()
 }

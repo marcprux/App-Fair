@@ -110,7 +110,7 @@ pub fn enabled() -> bool {
 /// dozen apps import in a blink); replaces any prior sync for the default repo. Safe to call again.
 pub fn seed() {
     let Ok(index) = serde_json::from_str::<IndexV2>(CATALOG) else {
-        eprintln!("app-fair: mock catalog failed to parse");
+        day::warn!("mock catalog failed to parse");
         return;
     };
     // Follow the UI language (set from `DAY_LOCALE`) so a French run shows French catalog fields

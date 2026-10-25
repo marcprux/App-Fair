@@ -2,9 +2,9 @@
 //! filter, the sync status line, and the app list with icons. Tapping a row pushes the detail
 //! page onto the tab's navigation stack.
 
+use day::async_image::ContentMode;
 use day::prelude::*;
-use day_piece_remote_image::ContentMode;
-use day_piece_searchfield::search_field;
+use day::searchfield::search_field;
 
 use crate::model::{AppSummary, SortOrder};
 use crate::state::{self, SyncUi};
@@ -14,66 +14,58 @@ const MUTED: Color = Color::hex(0x6B_6B_70);
 const PLACEHOLDER: Color = Color::hex(0xE3_E3_E8);
 const ACCENT: Color = Color::hex(0x2F_6F_DE);
 
-pub fn catalogs_page(path: Signal<Vec<Nav>>) -> AnyPiece {
+pub fn catalogs_page(path: Signal<Vec<Nav>>) -> impl Piece {
     let query = state::query();
     let category = state::category();
     let sort = state::sort_order();
     let version = state::catalog_version();
 
-    let switcher = each(
-        move || vec![version.get()],
-        |v: &u64| *v,
-        move |_| catalog_switcher(),
-    );
+    let switcher = keyed(move || Some(version.get()), move |_| catalog_switcher());
     // Adding a custom F-Droid catalog is still a beta feature — the "Add" button is exposed only in
     // debug builds; release builds hide it and browse the default App Fair catalog alone.
-    let mut header_items: Vec<AnyPiece> = vec![switcher.any().grow_w()];
-    if cfg!(debug_assertions) {
-        header_items.push(
+    let header = row((
+        switcher.grow_w(),
+        cfg!(debug_assertions).then(|| {
             button(crate::res::str::btn_add())
                 .action(move || push_nav(path, Nav::AddCatalog))
-                .id("catalog-add")
-                .any(),
-        );
-    }
-    header_items.push(
+                .id(day::id!(catalog_add))
+        }),
         button(crate::res::str::btn_refresh())
             .action(sync::sync_all_enabled)
-            .id("refresh")
-            .any(),
-    );
-    let header = row(PieceVec(header_items))
-        .align(VAlign::Center)
-        .spacing(8.0);
+            .id(day::id!(refresh)),
+    ))
+    .align(VAlign::Center)
+    .spacing(Space::S);
 
     let search = search_field(query)
         .placeholder(crate::res::str::search_placeholder())
-        .id("search");
+        .id(day::id!(search));
 
-    let category_region = each(
-        move || vec![version.get()],
-        |v: &u64| *v,
+    let category_region = keyed(
+        move || Some(version.get()),
         move |_| category_picker(category),
     );
     // The category filter (which grows to fill) and the sort-order drop-down share one row.
-    let controls = row((category_region.any().grow_w(), sort_picker(sort)))
-        .spacing(8.0)
+    let controls = row((category_region.grow_w(), sort_picker(sort)))
+        .spacing(Space::S)
         .align(VAlign::Center);
 
     let sync_line = label(move || sync_text(&state::sync_signal().get()))
         .font(Font::Footnote)
         .color(MUTED)
-        .id("sync-status");
+        .id(day::id!(sync_status));
 
     let list = list(
-        move || {
-            version.get();
-            query.get();
-            category.get();
-            state::repo_filter().get();
-            state::search_apps()
-        },
-        |a: &AppSummary| format!("{}~{}", a.repo_id, a.pkg),
+        items(
+            move || {
+                version.get();
+                query.get();
+                category.get();
+                state::repo_filter().get();
+                state::search_apps()
+            },
+            |a: &AppSummary| format!("{}~{}", a.repo_id, a.pkg),
+        ),
         app_row,
     )
     .row_height(RowHeight::Uniform(72.0))
@@ -90,118 +82,75 @@ pub fn catalogs_page(path: Signal<Vec<Nav>>) -> AnyPiece {
             );
         }
     })
-    // id BEFORE grow so it lands on the list node (which carries the selection handler), not the
-    // grow wrapper — otherwise a scripted `select` can't reach the list.
-    .id("app-list")
+    .id(day::id!(app_list))
     .grow();
 
     column((header, search, controls, sync_line, list))
         .spacing(10.0)
         .align(HAlign::Leading)
-        .padding(12.0)
-        .any()
+        .padding(Space::M)
 }
 
 /// A native dropdown choosing the catalog list's sort order: Default (the catalog's `rank`), Last
 /// Updated, or Name (locale-collated). Selecting one re-queries the list via [`state::search_apps`].
-fn sort_picker(sort: Signal<SortOrder>) -> AnyPiece {
-    let orders = [SortOrder::Default, SortOrder::LastUpdated, SortOrder::Name];
-    let labels: Vec<String> = vec![
-        crate::res::str::sort_default().format(),
-        crate::res::str::sort_last_updated().format(),
-        crate::res::str::sort_name().format(),
-    ];
-
-    let current = sort.get_untracked();
-    let start = orders.iter().position(|o| *o == current).unwrap_or(0);
-    let sel = Signal::new(start);
-
-    watch(
-        move || sel.get(),
-        move |idx: &usize, _| {
-            let chosen = orders.get(*idx).copied().unwrap_or_default();
-            if sort.get_untracked() != chosen {
-                sort.set(chosen);
-            }
-        },
-    );
-
-    picker(labels, sel).menu().id("sort-picker").any()
+fn sort_picker(sort: Signal<SortOrder>) -> impl Piece {
+    picker(
+        sort,
+        [
+            (SortOrder::Default, crate::res::str::sort_default()),
+            (SortOrder::LastUpdated, crate::res::str::sort_last_updated()),
+            (SortOrder::Name, crate::res::str::sort_name()),
+        ],
+    )
+    .menu()
+    .id(day::id!(sort_picker))
 }
 
 /// A native dropdown of "All Catalogs" + each enabled catalog. Selecting one filters the list.
-fn catalog_switcher() -> AnyPiece {
+fn catalog_switcher() -> impl Piece {
     let enabled: Vec<_> = state::repos().into_iter().filter(|r| r.enabled).collect();
-    let repo_filter = state::repo_filter();
 
-    let ids: Vec<Option<i64>> = std::iter::once(None)
-        .chain(enabled.iter().map(|r| Some(r.id)))
-        .collect();
-    let labels: Vec<String> = std::iter::once(crate::res::str::all_catalogs().format())
-        .chain(enabled.iter().map(|r| {
-            let name = if r.name.is_empty() {
-                r.address.clone()
-            } else {
-                r.name.clone()
-            };
-            crate::res::str::catalog_option(r.app_count, name).format()
-        }))
-        .collect();
+    let options: Vec<(Option<i64>, LocalizedText)> =
+        std::iter::once((None, crate::res::str::all_catalogs()))
+            .chain(enabled.iter().map(|r| {
+                let name = if r.name.is_empty() {
+                    r.address.clone()
+                } else {
+                    r.name.clone()
+                };
+                let title = crate::res::str::catalog_option(crate::res::str::CatalogOption {
+                    count: r.app_count,
+                    name,
+                });
+                (Some(r.id), title)
+            }))
+            .collect();
 
-    let current = repo_filter.get_untracked();
-    let start = ids.iter().position(|k| *k == current).unwrap_or(0);
-    let sel = Signal::new(start);
-
-    let ids_for_watch = ids.clone();
-    watch(
-        move || sel.get(),
-        move |idx: &usize, _| {
-            let chosen = ids_for_watch.get(*idx).copied().flatten();
-            if repo_filter.get_untracked() != chosen {
-                repo_filter.set(chosen);
-            }
-        },
-    );
-
-    picker(labels, sel).menu().id("catalog-switcher").any()
+    picker(state::repo_filter(), options)
+        .menu()
+        .id(day::id!(catalog_switcher))
 }
 
-/// A native dropdown of "All" + every category. Selecting one filters the list.
-fn category_picker(category: Signal<Option<String>>) -> AnyPiece {
+/// A native dropdown of "All" + every category. Selecting one filters the list. Nothing until the
+/// catalog has categories.
+fn category_picker(category: Signal<Option<String>>) -> impl Piece {
     let cats = state::all_categories();
-    if cats.is_empty() {
-        return label("").any();
-    }
-    let keys: Vec<Option<String>> = std::iter::once(None)
-        .chain(cats.iter().map(|c| Some(c.key.clone())))
-        .collect();
-    let labels: Vec<String> = std::iter::once(crate::res::str::all_categories().format())
-        .chain(cats.iter().map(|c| c.name.clone()))
-        .collect();
-
-    let current = category.get_untracked();
-    let start = keys.iter().position(|k| *k == current).unwrap_or(0);
-    let sel = Signal::new(start);
-
-    let keys_for_watch = keys.clone();
-    watch(
-        move || sel.get(),
-        move |idx: &usize, _| {
-            let chosen = keys_for_watch.get(*idx).cloned().flatten();
-            if category.get_untracked() != chosen {
-                category.set(chosen);
-            }
-        },
-    );
-
-    picker(labels, sel).menu().id("category-picker").any()
+    (!cats.is_empty()).then(|| {
+        // Category names come from the catalog as plain strings, so the "All" entry joins them
+        // as one.
+        let options: Vec<(Option<String>, String)> =
+            std::iter::once((None, crate::res::str::all_categories().format()))
+                .chain(cats.iter().map(|c| (Some(c.key.clone()), c.name.clone())))
+                .collect();
+        picker(category, options)
+            .menu()
+            .id(day::id!(category_picker))
+    })
 }
 
 /// A recycling list row. Every field is read INSIDE a reactive closure, so a recycled cell
 /// updates when it rebinds to a new app.
-pub(crate) fn app_row(slot: ItemSlot<AppSummary, String>) -> AnyPiece {
-    let key = slot.key();
-
+pub(crate) fn app_row(slot: ItemSlot<AppSummary, String>) -> impl Piece {
     let icon = crate::icons::row_icon(move || slot.field(|a| a.icon_url()))
         .rounded(10.0)
         .content_mode(ContentMode::Fit)
@@ -209,7 +158,7 @@ pub(crate) fn app_row(slot: ItemSlot<AppSummary, String>) -> AnyPiece {
         .frame(48.0, 48.0);
 
     row((
-        icon.any(),
+        icon,
         column((
             label(move || slot.field(|a| a.name.clone())).font(Font::Body),
             label(move || slot.field(|a| a.summary.clone()))
@@ -223,11 +172,10 @@ pub(crate) fn app_row(slot: ItemSlot<AppSummary, String>) -> AnyPiece {
             .font(Font::Caption)
             .color(ACCENT),
     ))
-    .spacing(12.0)
+    .spacing(Space::M)
     .align(VAlign::Center)
     .padding(Insets::symmetric(6.0, 8.0))
-    .id_keyed("app-row", key)
-    .any()
+    .id_of(move || day::id!(app_row, slot.key()))
 }
 
 fn sync_text(sync: &SyncUi) -> String {

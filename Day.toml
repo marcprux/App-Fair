@@ -9,13 +9,13 @@ schema = 1
 id = "org.appfair.AppFair"
 title = "App Fair"
 build = 4
-targets = ["android-mdc", "ios-uikit"]
+targets = ["android-material", "ios-uikit"]
 
 [window]
 width = 960
 height = 640
 
-# Release signing. `day pack -p android-mdc --profile release` resolves these `${VAR}` refs
+# Release signing. `day pack -p android-material --profile release` resolves these `${VAR}` refs
 # at pack time and writes the Gradle signingConfig; a missing var degrades to a dev keystore
 # (validate with `day sign --check`). Set the vars from misc/keys/keystore.properties + keystore.jks:
 #   export DAY_ANDROID_KEYSTORE=/abs/path/keystore.jks DAY_ANDROID_KEY_ALIAS=app \

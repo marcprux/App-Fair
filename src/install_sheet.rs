@@ -12,30 +12,6 @@ const INK: Color = Color::hex(0x15_15_17);
 const MUTED: Color = Color::hex(0x6B_6B_70);
 const ACCENT: Color = Color::hex(0x2F_6F_DE);
 
-fn phase() -> Option<InstallPhase> {
-    state::install_signal().get().map(|u| u.phase)
-}
-
-fn is(p: InstallPhase) -> bool {
-    phase().as_ref() == Some(&p)
-}
-
-fn is_downloading() -> bool {
-    is(InstallPhase::Downloading)
-}
-fn is_installing() -> bool {
-    is(InstallPhase::Installing)
-}
-fn is_success() -> bool {
-    is(InstallPhase::Success)
-}
-fn is_cancelled() -> bool {
-    is(InstallPhase::Cancelled)
-}
-fn is_failed() -> bool {
-    matches!(phase(), Some(InstallPhase::Failed(_)))
-}
-
 fn human(bytes: u64) -> String {
     let mb = bytes as f64 / 1_048_576.0;
     if mb >= 1.0 {
@@ -46,7 +22,7 @@ fn human(bytes: u64) -> String {
 }
 
 /// The overlay, gated by the caller with `when(install.is_some, …)`.
-pub fn install_sheet() -> AnyPiece {
+pub fn install_sheet() -> impl Piece {
     let install = state::install_signal();
 
     let title = label(move || install.get().map(|u| u.name).unwrap_or_default())
@@ -55,85 +31,83 @@ pub fn install_sheet() -> AnyPiece {
 
     let card = column((
         title,
-        // Downloading: a determinate bar + byte counts + Cancel.
-        when(is_downloading, || {
-            let install = state::install_signal();
-            column((
-                label(crate::res::str::install_downloading())
-                    .font(Font::Subheadline)
-                    .color(MUTED),
-                progress(move || install.get().map(|u| u.progress as f64).unwrap_or(0.0))
-                    .id("install-progress"),
-                label(move || {
-                    install
-                        .get()
-                        .map(|u| {
-                            crate::res::str::install_bytes(human(u.downloaded), human(u.total))
+        // One body per phase, rebuilt only when the phase changes (progress ticks keep the
+        // downloading body and update it in place).
+        keyed(
+            move || install.get().map(|u| u.phase),
+            move |phase| match phase {
+                // Downloading: a determinate bar + byte counts + Cancel.
+                InstallPhase::Downloading => column((
+                    label(crate::res::str::install_downloading())
+                        .font(Font::Subheadline)
+                        .color(MUTED),
+                    progress(move || install.get().map(|u| u.progress as f64).unwrap_or(0.0))
+                        .id(day::id!(install_progress)),
+                    label(move || {
+                        install
+                            .get()
+                            .map(|u| {
+                                crate::res::str::install_bytes(crate::res::str::InstallBytes {
+                                    done: human(u.downloaded),
+                                    total: human(u.total),
+                                })
                                 .format()
-                        })
-                        .unwrap_or_default()
-                })
-                .font(Font::Footnote)
-                .color(MUTED),
-                button(crate::res::str::btn_cancel())
-                    .action(crate::install::cancel)
-                    .id("install-cancel"),
-            ))
-            .spacing(10.0)
-            .align(HAlign::Leading)
-        }),
-        // Installing: the system confirm screen is up.
-        when(is_installing, || {
-            column((
-                spinner(),
-                label(crate::res::str::install_installing())
-                    .font(Font::Subheadline)
-                    .color(MUTED),
-                label(crate::res::str::install_confirm_hint())
+                            })
+                            .unwrap_or_default()
+                    })
                     .font(Font::Footnote)
                     .color(MUTED),
-            ))
-            .spacing(10.0)
-            .align(HAlign::Leading)
-        }),
-        // Terminal states.
-        when(is_success, || {
-            column((
-                label(crate::res::str::install_done())
-                    .font(Font::Headline)
-                    .color(ACCENT),
-                dismiss_button(crate::res::str::btn_done(), true),
-            ))
-            .spacing(10.0)
-            .align(HAlign::Leading)
-        }),
-        when(is_cancelled, || {
-            column((
-                label(crate::res::str::install_cancelled())
-                    .font(Font::Headline)
-                    .color(MUTED),
-                dismiss_button(crate::res::str::btn_close(), false),
-            ))
-            .spacing(10.0)
-            .align(HAlign::Leading)
-        }),
-        when(is_failed, || {
-            let install = state::install_signal();
-            column((
-                label(crate::res::str::install_failed())
-                    .font(Font::Headline)
-                    .color(Color::hex(0xC0_39_2B)),
-                label(move || match install.get().map(|u| u.phase) {
-                    Some(InstallPhase::Failed(m)) => m,
-                    _ => String::new(),
-                })
-                .font(Font::Footnote)
-                .color(MUTED),
-                dismiss_button(crate::res::str::btn_close(), false),
-            ))
-            .spacing(10.0)
-            .align(HAlign::Leading)
-        }),
+                    button(crate::res::str::btn_cancel())
+                        .action(crate::install::cancel)
+                        .id(day::id!(install_cancel)),
+                ))
+                .spacing(10.0)
+                .align(HAlign::Leading)
+                .any(),
+                // Installing: the system confirm screen is up.
+                InstallPhase::Installing => column((
+                    spinner(),
+                    label(crate::res::str::install_installing())
+                        .font(Font::Subheadline)
+                        .color(MUTED),
+                    label(crate::res::str::install_confirm_hint())
+                        .font(Font::Footnote)
+                        .color(MUTED),
+                ))
+                .spacing(10.0)
+                .align(HAlign::Leading)
+                .any(),
+                // Terminal states.
+                InstallPhase::Success => column((
+                    label(crate::res::str::install_done())
+                        .font(Font::Headline)
+                        .color(ACCENT),
+                    dismiss_button(crate::res::str::btn_done(), true),
+                ))
+                .spacing(10.0)
+                .align(HAlign::Leading)
+                .any(),
+                InstallPhase::Cancelled => column((
+                    label(crate::res::str::install_cancelled())
+                        .font(Font::Headline)
+                        .color(MUTED),
+                    dismiss_button(crate::res::str::btn_close(), false),
+                ))
+                .spacing(10.0)
+                .align(HAlign::Leading)
+                .any(),
+                InstallPhase::Failed(message) => column((
+                    label(crate::res::str::install_failed())
+                        .font(Font::Headline)
+                        .color(Color::hex(0xC0_39_2B)),
+                    label(message.clone()).font(Font::Footnote).color(MUTED),
+                    dismiss_button(crate::res::str::btn_close(), false),
+                ))
+                .spacing(10.0)
+                .align(HAlign::Leading)
+                .any(),
+            },
+        ),
     ))
     .spacing(14.0)
     .align(HAlign::Leading)
@@ -146,20 +120,11 @@ pub fn install_sheet() -> AnyPiece {
     column((spacer(), row((spacer(), card, spacer())), spacer()))
         .grow()
         .background(SCRIM)
-        .any()
 }
 
-fn dismiss_button<M>(text: impl IntoText<M>, prominent: bool) -> AnyPiece {
-    if prominent {
-        button(text)
-            .prominent()
-            .action(|| state::set_install(None))
-            .id("install-dismiss")
-            .any()
-    } else {
-        button(text)
-            .action(|| state::set_install(None))
-            .id("install-dismiss")
-            .any()
-    }
+fn dismiss_button<M>(text: impl IntoText<M>, prominent: bool) -> impl Piece {
+    button(text)
+        .apply_if(prominent, |b| b.prominent())
+        .action(|| state::set_install(None))
+        .id(day::id!(install_dismiss))
 }

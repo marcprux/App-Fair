@@ -2,8 +2,8 @@
 //! badge, a horizontal screenshot filmstrip, the (HTML-flattened) description and "what's new",
 //! and the styled, tappable permissions and anti-features.
 
+use day::async_image::{ContentMode, async_image};
 use day::prelude::*;
-use day_piece_remote_image::{ContentMode, remote_image};
 
 use crate::model::AppDetail;
 use crate::{db, icons, platform, state};
@@ -21,7 +21,7 @@ const CARD_WARN: Color = Color::hex(0xFB_EF_DE);
 pub fn detail_page(repo_id: i64, pkg: String) -> AnyPiece {
     let Some(app) = state::with_db(|conn| db::detail(conn, repo_id, &pkg).ok().flatten()) else {
         return column((label(crate::res::str::app_not_found()).font(Font::Title),))
-            .padding(16.0)
+            .padding(Space::L)
             .any();
     };
 
@@ -44,14 +44,14 @@ pub fn detail_page(repo_id: i64, pkg: String) -> AnyPiece {
         ))
         .spacing(18.0)
         .align(HAlign::Leading)
-        .padding(16.0),
+        .padding(Space::L),
     )
     .any()
 }
 
-fn header(app: &AppDetail, compatible: bool) -> AnyPiece {
+fn header(app: &AppDetail, compatible: bool) -> impl Piece {
     let icon: AnyPiece = match app.icon_url() {
-        Some(url) => remote_image(icons::image_signal(&url))
+        Some(url) => async_image(icons::image_signal(&url))
             .rounded(14.0)
             .content_mode(ContentMode::Fit)
             .frame(64.0, 64.0)
@@ -88,15 +88,14 @@ fn header(app: &AppDetail, compatible: bool) -> AnyPiece {
     let version_line = if size.is_empty() {
         crate::res::str::version_line(version)
     } else {
-        crate::res::str::version_line_size(size, version)
+        crate::res::str::version_line_size(crate::res::str::VersionLineSize { size, version })
     };
 
     // Rebuild the action button whenever the catalog changes — a successful install/update bumps
     // it, so the button flips (Install → Installed/Launch) without re-navigating.
     let app_for_button = app.clone();
-    let button = each(
-        move || vec![state::catalog_version().get()],
-        |v: &u64| *v,
+    let button = keyed(
+        move || Some(state::catalog_version().get()),
         move |_| action_button(&app_for_button, compatible),
     );
 
@@ -112,11 +111,10 @@ fn header(app: &AppDetail, compatible: bool) -> AnyPiece {
         .spacing(3.0)
         .align(HAlign::Leading)
         .grow_w(),
-        button.any(),
+        button,
     ))
     .spacing(14.0)
     .align(VAlign::Center)
-    .any()
 }
 
 /// Install / Update / Launch, based on the on-device version and device compatibility.
@@ -152,7 +150,7 @@ fn launch_button(app: &AppDetail) -> AnyPiece {
                 }
             });
         })
-        .id("detail-launch")
+        .id(day::id!(detail_launch))
         .any()
 }
 
@@ -164,7 +162,7 @@ fn install_button<M>(verb: impl IntoText<M>, app: &AppDetail, compatible: bool) 
         return button(verb)
             .prominent()
             .action(move || crate::install::start(&app))
-            .id("detail-install")
+            .id(day::id!(detail_install))
             .any();
     }
     let (name, min_sdk, device_sdk) = (app.name.clone(), app.min_sdk, platform::device_sdk());
@@ -179,58 +177,53 @@ fn install_button<M>(verb: impl IntoText<M>, app: &AppDetail, compatible: bool) 
                     .await;
             });
         })
-        .id("detail-install")
+        .id(day::id!(detail_install))
         .any()
 }
 
 /// A one-line device-compatibility badge under the header. Hidden when the SDK levels are unknown.
-fn compatibility(app: &AppDetail, device_sdk: i64) -> AnyPiece {
+fn compatibility(app: &AppDetail, device_sdk: i64) -> Option<impl Piece> {
     if device_sdk == 0 || app.min_sdk == 0 {
-        return label("").any();
+        return None;
     }
     let compatible = app.min_sdk <= device_sdk;
     let (icon, text, color) = if compatible {
         (
             crate::res::images::ic_ok,
-            crate::res::str::compatible_yes().format(),
+            crate::res::str::compatible_yes(),
             OK,
         )
     } else {
         (
             crate::res::images::ic_incompat,
-            crate::res::str::compatible_needs(android_release(app.min_sdk)).format(),
+            crate::res::str::compatible_needs(android_release(app.min_sdk)),
             DANGER,
         )
     };
-    row((
-        image(icon).frame(20.0, 20.0).any(),
-        label(text).font(Font::Footnote).color(color).grow_w(),
-    ))
-    .spacing(8.0)
-    .align(VAlign::Center)
-    .any()
+    Some(
+        row((
+            image(icon).frame(20.0, 20.0),
+            label(text).font(Font::Footnote).color(color).grow_w(),
+        ))
+        .spacing(Space::S)
+        .align(VAlign::Center),
+    )
 }
 
 /// Source + uninstall controls, shown only when App Fair installed this app and it's still on the
 /// device (#9). Rebuilds on catalog changes so it disappears once the app is uninstalled.
-fn manage(app: &AppDetail) -> AnyPiece {
+fn manage(app: &AppDetail) -> impl Piece {
     let app = app.clone();
-    each(
-        move || vec![state::catalog_version().get()],
-        |v: &u64| *v,
+    keyed(
+        move || Some(state::catalog_version().get()),
         move |_| manage_body(&app),
     )
-    .any()
 }
 
-fn manage_body(app: &AppDetail) -> AnyPiece {
+fn manage_body(app: &AppDetail) -> Option<impl Piece + use<>> {
     // Only when App Fair has a record of installing this app and it's still on the device.
-    let Some(repo_id) = state::with_db(|conn| db::install_source(conn, &app.pkg)) else {
-        return label("").any();
-    };
-    if platform::installed_version(&app.pkg).is_none() {
-        return label("").any();
-    }
+    let repo_id = state::with_db(|conn| db::install_source(conn, &app.pkg))?;
+    platform::installed_version(&app.pkg)?;
     let source = state::with_db(|conn| db::repo_name(conn, repo_id));
     let source_text = if source.is_empty() {
         crate::res::str::installed_by_app_fair()
@@ -269,22 +262,26 @@ fn manage_body(app: &AppDetail) -> AnyPiece {
         });
     });
 
-    row((
-        label(source_text)
-            .font(Font::Footnote)
-            .color(MUTED)
-            .grow_w(),
-        uninstall.id("detail-uninstall"),
-    ))
-    .spacing(12.0)
-    .align(VAlign::Center)
-    .any()
+    Some(
+        row((
+            label(source_text)
+                .font(Font::Footnote)
+                .color(MUTED)
+                .grow_w(),
+            uninstall.id(day::id!(detail_uninstall)),
+        ))
+        .spacing(Space::M)
+        .align(VAlign::Center),
+    )
 }
 
 /// The blocked-install dialog body.
 fn incompatible_message(min_sdk: i64, device_sdk: i64) -> String {
-    crate::res::str::incompatible_body(android_release(device_sdk), android_release(min_sdk))
-        .format()
+    crate::res::str::incompatible_body(crate::res::str::IncompatibleBody {
+        have: android_release(device_sdk),
+        need: android_release(min_sdk),
+    })
+    .format()
 }
 
 /// Marketing version + API level for common Android releases, e.g. `24` → `7.0 (API 24)`.
@@ -341,70 +338,64 @@ fn format_size(bytes: i64) -> String {
     }
 }
 
-fn screenshots(app: &AppDetail) -> AnyPiece {
+fn screenshots(app: &AppDetail) -> Option<impl Piece> {
     let urls = app.screenshot_urls();
     if urls.is_empty() {
-        return label("").any();
+        return None;
     }
     // A horizontal filmstrip of screenshot cards.
-    let shots: Vec<AnyPiece> = urls
+    let shots: Vec<_> = urls
         .iter()
         .take(12)
         .map(|url| {
-            remote_image(icons::image_signal(url))
+            async_image(icons::image_signal(url))
                 .rounded(12.0)
                 .content_mode(ContentMode::Fit)
                 .frame(190.0, 340.0)
-                .any()
         })
         .collect();
-    section_block(
+    Some(section_block(
         crate::res::str::section_screenshots(),
-        scroll(row(PieceVec(shots)).spacing(12.0).align(VAlign::Top))
+        scroll(row(shots).spacing(Space::M).align(VAlign::Top))
             .horizontal()
-            .height(340.0)
-            .any(),
-    )
+            .height(340.0),
+    ))
 }
 
-fn description(app: &AppDetail) -> AnyPiece {
+fn description(app: &AppDetail) -> Option<impl Piece> {
     let raw = if app.description.is_empty() {
         &app.summary
     } else {
         &app.description
     };
     if raw.is_empty() {
-        return label("").any();
+        return None;
     }
     // Catalogs put light HTML (<b>, <i>, <a>, lists) in descriptions. Flatten it to plain text.
     // TODO(styled-text): once Day labels support attributed/styled runs, render this as styled
     // text and keep the emphasis and links (see crate::util::strip_html).
     let text = crate::util::strip_html(raw);
     if text.is_empty() {
-        return label("").any();
+        return None;
     }
-    column((label(text).font(Font::Body),))
-        .align(HAlign::Leading)
-        .any()
+    Some(column((label(text).font(Font::Body),)).align(HAlign::Leading))
 }
 
-fn whats_new(app: &AppDetail) -> AnyPiece {
+fn whats_new(app: &AppDetail) -> Option<impl Piece> {
     if app.whats_new.trim().is_empty() {
-        return label("").any();
+        return None;
     }
-    section_block(
+    Some(section_block(
         crate::res::str::section_whats_new(),
-        label(crate::util::strip_html(&app.whats_new))
-            .font(Font::Body)
-            .any(),
-    )
+        label(crate::util::strip_html(&app.whats_new)).font(Font::Body),
+    ))
 }
 
-fn permissions(app: &AppDetail) -> AnyPiece {
+fn permissions(app: &AppDetail) -> Option<impl Piece> {
     if app.permissions.is_empty() {
-        return label("").any();
+        return None;
     }
-    let rows: Vec<AnyPiece> = app
+    let rows: Vec<_> = app
         .permissions
         .iter()
         .map(|p| {
@@ -429,20 +420,17 @@ fn permissions(app: &AppDetail) -> AnyPiece {
             })
         })
         .collect();
-    section_block(
+    Some(section_block(
         crate::res::str::section_permissions(),
-        column(PieceVec(rows))
-            .align(HAlign::Leading)
-            .spacing(8.0)
-            .any(),
-    )
+        column(rows).align(HAlign::Leading).spacing(Space::S),
+    ))
 }
 
-fn anti_features(app: &AppDetail) -> AnyPiece {
+fn anti_features(app: &AppDetail) -> Option<impl Piece> {
     if app.anti_features.is_empty() {
-        return label("").any();
+        return None;
     }
-    let rows: Vec<AnyPiece> = app
+    let rows: Vec<_> = app
         .anti_features
         .iter()
         .map(|af| {
@@ -471,13 +459,10 @@ fn anti_features(app: &AppDetail) -> AnyPiece {
             )
         })
         .collect();
-    section_block(
+    Some(section_block(
         crate::res::str::section_antifeatures(),
-        column(PieceVec(rows))
-            .align(HAlign::Leading)
-            .spacing(8.0)
-            .any(),
-    )
+        column(rows).align(HAlign::Leading).spacing(Space::S),
+    ))
 }
 
 /// One styled, tappable row: a leading category icon, the title, and a trailing info glyph that
@@ -488,13 +473,13 @@ fn info_row(
     title_color: Color,
     card: Color,
     on_tap: impl Fn() + 'static,
-) -> AnyPiece {
+) -> impl Piece {
     row((
-        image(icon).frame(24.0, 24.0).any(),
+        image(icon.into()).frame(24.0, 24.0),
         label(title).font(Font::Body).color(title_color).grow_w(),
-        image(crate::res::images::ic_info).frame(18.0, 18.0).any(),
+        image(crate::res::images::ic_info).frame(18.0, 18.0),
     ))
-    .spacing(12.0)
+    .spacing(Space::M)
     .align(VAlign::Center)
     .padding(Insets::symmetric(12.0, 10.0))
     .background(card)
@@ -502,59 +487,43 @@ fn info_row(
     .on_tap(on_tap)
 }
 
-fn links(app: &AppDetail) -> AnyPiece {
-    let mut rows: Vec<AnyPiece> = Vec::new();
-    if !app.license.is_empty() {
-        rows.push(
+fn links(app: &AppDetail) -> impl Piece {
+    column((
+        (!app.license.is_empty()).then(|| {
             label(crate::res::str::license_line(app.license.clone()))
                 .font(Font::Footnote)
                 .color(MUTED)
-                .any(),
-        );
-    }
-    // Website and Source are URLs — render them as links that open the system browser.
-    if !app.website.is_empty() {
-        rows.push(
+        }),
+        // Website and Source are URLs — render them as links that open the system browser.
+        (!app.website.is_empty()).then(|| {
             link(
                 crate::res::str::website_line(app.website.clone()),
                 app.website.clone(),
             )
             .font(Font::Footnote)
             .color(ACCENT)
-            .any(),
-        );
-    }
-    if !app.source_code.is_empty() {
-        rows.push(
+        }),
+        (!app.source_code.is_empty()).then(|| {
             link(
                 crate::res::str::source_line(app.source_code.clone()),
                 app.source_code.clone(),
             )
             .font(Font::Footnote)
             .color(ACCENT)
-            .any(),
-        );
-    }
-    rows.push(
+        }),
         label(crate::res::str::package_line(app.pkg.clone()))
             .font(Font::Footnote)
-            .color(MUTED)
-            .any(),
-    );
-    // The pinned signing key (#3): its first bytes are enough for a user to recognize the signer
-    // across updates without a wall of hex.
-    if !app.signer.is_empty() {
-        rows.push(
+            .color(MUTED),
+        // The pinned signing key (#3): its first bytes are enough for a user to recognize the signer
+        // across updates without a wall of hex.
+        (!app.signer.is_empty()).then(|| {
             label(crate::res::str::signed_by(short_fingerprint(&app.signer)))
                 .font(Font::Footnote)
                 .color(MUTED)
-                .any(),
-        );
-    }
-    column(PieceVec(rows))
-        .align(HAlign::Leading)
-        .spacing(3.0)
-        .any()
+        }),
+    ))
+    .align(HAlign::Leading)
+    .spacing(3.0)
 }
 
 /// A recognizable prefix of a signing-cert SHA-256, grouped in colon-separated byte pairs, e.g.
@@ -574,11 +543,10 @@ fn short_fingerprint(fp: &str) -> String {
     }
 }
 
-fn section_block<M>(title: impl IntoText<M>, body: AnyPiece) -> AnyPiece {
+fn section_block<M>(title: impl IntoText<M>, body: impl Piece) -> impl Piece {
     column((label(title).font(Font::Headline), body))
-        .spacing(8.0)
+        .spacing(Space::S)
         .align(HAlign::Leading)
-        .any()
 }
 
 #[cfg(test)]

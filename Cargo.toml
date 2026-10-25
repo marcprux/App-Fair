@@ -13,7 +13,7 @@ appkit = ["day/appkit"]
 gtk = ["day/gtk"]
 qt = ["day/qt"]
 uikit = ["day/uikit"]
-mdc = ["day/mdc"]
+material = ["day/material"]
 winui = ["day/winui"]
 arkui = ["day/arkui"]
 mock = ["day/mock"]
@@ -21,20 +21,19 @@ mock = ["day/mock"]
 # rlib for the desktop bin; the mobile pipeline requests the iOS staticlib / Android cdylib via
 # `cargo rustc --crate-type`.
 [lib]
+# A CONSTANT name, not the package's. Every artifact Day stages is named after the LIB target —
+# `libdayapp.a` for the iOS/macOS staticlib, `libdayapp.so` for the Android cdylib, and the
+# `dayapp::` path `src/main.rs` imports — so none of them move when the package is renamed.
+# Renaming this app is a one-line edit to `[package] name` above (DESIGN.md §17.5).
+name = "dayapp"
 crate-type = ["rlib"]
 
 [dependencies]
 day = { git = "https://github.com/daybrite/day.git" }
 # on_main: marshal JNI calls that need the app classloader back onto the UI thread.
 day-reactive = { git = "https://github.com/daybrite/day.git" }
-# Icons + screenshots: decode fetched PNG/JPEG bytes natively (day build unions its per-backend
-# renderer features).
-day-piece-remote-image = { git = "https://github.com/daybrite/day.git" }
 # Persistent settings (added repositories, last-sync bookkeeping).
-day-part-prefs = { git = "https://github.com/daybrite/day.git" }
-# Native search control for the browse page.
-day-piece-searchfield = { git = "https://github.com/daybrite/day.git" }
-# The native dropdown (`picker`) for the category/sort/catalog filters is now a built-in in `day`.
+day-part-preferences = { git = "https://github.com/daybrite/day.git" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # On-device catalog. Diesel is the query/schema layer; libsqlite3-sys `bundled` compiles SQLite in
@@ -57,7 +56,7 @@ icu_locale_core = "2"
 
 # Reach the app's JVM + Context on Android (with_env / dcall_static) for the install bridge.
 [target.'cfg(target_os = "android")'.dependencies]
-day-android = { git = "https://github.com/daybrite/day.git" }
+day-platform-android = { git = "https://github.com/daybrite/day.git" }
 # Lower background-thread OS priority so the first sync never starves the UI thread.
 libc = "0.2"
 
@@ -76,8 +75,5 @@ proguard = ["android/proguard-rules.pro"]
 [build-dependencies]
 day-build = { git = "https://github.com/daybrite/day.git" }
 
-[[bin]]
-name = "app-fair"
-path = "src/main.rs"
 
 [workspace]

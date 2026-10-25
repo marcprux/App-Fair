@@ -39,22 +39,34 @@ val daySigning = Properties().apply {
 }
 
 android {
-    namespace = "org.appfair"
-    compileSdk = 35
+    // Day.toml [app] id, conveyed by `day build`; the literal is the fresh-checkout
+    // fallback that lets Android Studio open this project before a Day build has run.
+    namespace = dayApp.getProperty("namespace") ?: "org.appfair"
+    compileSdk = 37
     defaultConfig {
         applicationId = dayApp.getProperty("applicationId") ?: "org.appfair.AppFair"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 37
         versionCode = dayApp.getProperty("versionCode")?.toInt() ?: 1
         // The app label — Day.toml [app] title, resolved per target (an [app.android] override
         // wins); the manifest references it as ${dayTitle}.
         manifestPlaceholders["dayTitle"] = dayApp.getProperty("title") ?: "App Fair"
+        manifestPlaceholders["dayScheme"] = dayApp.getProperty("scheme") ?: "appfair"
+        // Day.toml [window] → the activities' <layout> element: how small a window may be dragged
+        // and how big it opens in desktop windowing (docs/size-classes.md). A manifest is a
+        // build-time declaration, so these cannot ride WindowOptions the way the iOS minimum does.
+        // Defaulted rather than dayRequired: an app whose day CLI predates the [window] minimum
+        // still builds, with the same numbers Day.toml would have defaulted to.
+        manifestPlaceholders["dayWidth"] = dayApp.getProperty("windowWidth") ?: "960"
+        manifestPlaceholders["dayHeight"] = dayApp.getProperty("windowHeight") ?: "640"
+        manifestPlaceholders["dayMinWidth"] = dayApp.getProperty("windowMinWidth") ?: "320"
+        manifestPlaceholders["dayMinHeight"] = dayApp.getProperty("windowMinHeight") ?: "400"
         versionName = dayApp.getProperty("versionName") ?: "0.1.0"
     }
     sourceSets {
         getByName("main") {
-            // The day-android Java shim (DayActivity, DayBridge, …): `day build` resolves it
-            // from the day-android crate via cargo metadata and stages the path in
+            // The day-toolkit-material Java shim (DayActivity, DayBridge, …): `day build` resolves it
+            // from the day-toolkit-material crate via cargo metadata and stages the path in
             // day-pieces.json — wherever cargo has the crate (workspace, git checkout, or
             // registry source). See the guard below for what happens when it is absent.
             (dayPieces["dayJavaSrcDir"] as? String)?.let { java.srcDir(it) }
@@ -113,7 +125,7 @@ android {
 
 dependencies {
     // Material Components — the M3 Expressive theme (res/values/styles.xml) and the Material
-    // widgets the day-android shim creates (MaterialButton, MaterialSwitch, Slider, text fields,
+    // widgets the day-toolkit-material shim creates (MaterialButton, MaterialSwitch, Slider, text fields,
     // progress/loading indicators, BottomNavigationView tabs, Material dialogs).
     implementation("com.google.android.material:material:1.14.0")
     // Fragment-managed navigation (DayNavHost): fragment 1.7+ dispatches system back through
@@ -126,15 +138,15 @@ dependencies {
 }
 
 
-// Without the day-android Java shim the APK would install and then CRASH at launch with
+// Without the day-toolkit-material Java shim the APK would install and then CRASH at launch with
 // ClassNotFoundException (DayActivity never reaches the dex). IDE sync still configures; an
 // actual build fails with instructions instead of producing a broken APK.
 if (dayPieces["dayJavaSrcDir"] == null) {
     tasks.configureEach {
         if (name == "preBuild") doFirst {
             throw GradleException(
-                "The day-android Java shim was not staged — build through the day CLI " +
-                "(`day launch -p android-mdc` / `day build -p android-mdc`), which writes " +
+                "The day-toolkit-material Java shim was not staged — build through the day CLI " +
+                "(`day launch -p android-material` / `day build -p android-material`), which writes " +
                 "build/day/android/day-pieces.json. A bare Gradle build cannot produce a working APK."
             )
         }

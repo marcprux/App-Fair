@@ -1,0 +1,15 @@
+# Store listing metadata that is NOT localized. The localized text lives in store/<locale>/.
+# bundle-id: omitted on purpose — `day store` falls back to Day.toml [app] id, which is
+# the source of truth. Set it here only to publish under an id the app does not build with.
+apple-category = "UTILITIES"
+copyright = "2026 App Fair Project"
+contact-email = "support@appfair.org"
+review-notes = """
+App Fair browses F-Droid-compatible catalogs of free and open-source apps and installs them through
+Android's own package installer, after verifying each download against the checksum the catalog
+publishes. Install permission is requested at the first install, and the system's own confirmation
+dialog is what completes it.
+
+Set APP_FAIR_MOCK=1 to run against the bundled offline catalog if outbound network access is
+unavailable during review.
+"""

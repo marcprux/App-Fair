@@ -4,7 +4,7 @@
 // cdylib (Java_org_appfair_app_appfair_DayInstaller_nativeInstallResult). Also exposes the app's
 // files directory (for the SQLite catalog), installed-version lookups (Install vs Update), and
 // localized permission labels. Staged into the Gradle build via [package.metadata.day.android];
-// uses day-android's cached Context (DayBridge.ctx). No day-android edits.
+// uses day-toolkit-material's cached Context (DayBridge.ctx). No day-toolkit-material edits.
 package org.appfair.app.appfair;
 
 import android.app.PendingIntent;

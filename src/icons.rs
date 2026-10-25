@@ -1,10 +1,10 @@
 //! Remote image cache for list icons and screenshots. Each URL maps to one reactive
-//! `Signal<Option<Arc<Vec<u8>>>>` that a `remote_image` piece renders. Loads run on a small pool
+//! `Signal<Option<Arc<Vec<u8>>>>` that a `async_image` piece renders. Loads run on a small pool
 //! of background workers (not a thread per icon, which would storm the network and starve the UI),
 //! reading from the on-disk cache when present. Recycled list rows asking for the same URL get the
 //! same signal, so an icon is fetched at most once.
 //!
-//! Day's `remote_image` only decodes and displays bytes — the fetch (and so the mirror fallback) is
+//! Day's `async_image` only decodes and displays bytes — the fetch (and so the mirror fallback) is
 //! ours. A metadata-only repo (e.g. appfair.net) serves no images itself and points at F-Droid-style
 //! mirrors for the binaries, so a request to the primary host 404s; [`load`] then retries the same
 //! path on each of the repo's mirrors and remembers the one that worked so later icons skip the dead
@@ -16,8 +16,8 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
+use day::async_image::{AsyncImage, async_image};
 use day::prelude::*;
-use day_piece_remote_image::{RemoteImage, remote_image};
 
 /// A cached image's reactive bytes.
 type ImageSig = Signal<Option<Arc<Vec<u8>>>>;
@@ -35,10 +35,10 @@ pub fn set_mirror_bases(map: Vec<(String, Vec<String>)>) {
     *MIRROR_BASES.lock().unwrap() = map;
 }
 
-/// A `remote_image` whose bytes follow a reactive URL. As a recycling list row rebinds to a new
+/// A `async_image` whose bytes follow a reactive URL. As a recycling list row rebinds to a new
 /// item, `url_of` yields the new icon URL and the image swaps. The URL closure MUST read the item
 /// reactively (e.g. `move || slot.field(|a| a.icon_url())`).
-pub fn row_icon(url_of: impl Fn() -> Option<String> + 'static) -> RemoteImage {
+pub fn row_icon(url_of: impl Fn() -> Option<String> + 'static) -> AsyncImage {
     let bytes: ImageSig = Signal::new(None);
     // Mirror the current URL's cached image signal into this row-local signal. Re-runs both when
     // the row rebinds (URL changes) and when that URL's bytes finish loading.
@@ -46,14 +46,28 @@ pub fn row_icon(url_of: impl Fn() -> Option<String> + 'static) -> RemoteImage {
         move || url_of().and_then(|u| image_signal(&u).get()),
         move |b: &Option<Arc<Vec<u8>>>| bytes.set(b.clone()),
     );
-    remote_image(bytes)
+    async_image(bytes)
 }
 
 /// How many icons/screenshots download at once.
 const WORKERS: usize = 6;
 
-thread_local! {
-    static CACHE: RefCell<HashMap<String, ImageSig>> = RefCell::new(HashMap::new());
+/// The decoded-icon cache — app-wide (docs/state.md): a CACHE over shared catalog art, so two
+/// windows showing the same app read one decode.
+#[derive(Clone, Default)]
+struct Cache(std::rc::Rc<RefCell<HashMap<String, ImageSig>>>);
+
+impl Ambient for Cache {
+    fn create() -> Self {
+        Cache::default()
+    }
+}
+
+impl Cache {
+    /// The same shape the `thread_local!` accessor had, so every call site below reads the same.
+    fn with<R>(f: impl FnOnce(&RefCell<HashMap<String, ImageSig>>) -> R) -> R {
+        f(&Cache::app().0)
+    }
 }
 
 struct Job {
@@ -98,9 +112,9 @@ fn worker() {
     }
 }
 
-/// The signal backing `remote_image` for `url`, enqueuing a load on first request.
+/// The signal backing `async_image` for `url`, enqueuing a load on first request.
 pub fn image_signal(url: &str) -> ImageSig {
-    CACHE.with(|c| {
+    Cache::with(|c| {
         if let Some(sig) = c.borrow().get(url) {
             return *sig;
         }

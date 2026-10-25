@@ -76,18 +76,17 @@ fn add(raw: &str, error: Signal<String>) {
     nav_back();
 }
 
-pub fn add_catalog_page() -> AnyPiece {
+pub fn add_catalog_page() -> impl Piece {
     let url = Signal::new(String::new());
     let error = Signal::new(String::new());
 
-    let presets: Vec<AnyPiece> = PRESETS
+    let presets: Vec<_> = PRESETS
         .iter()
         .map(|(name, u)| {
             let u = *u;
             button(*name)
                 .action(move || url.set(u.to_string()))
-                .id_keyed("preset", *name)
-                .any()
+                .id(day::id!(preset, *name))
         })
         .collect();
 
@@ -99,29 +98,24 @@ pub fn add_catalog_page() -> AnyPiece {
                 .color(MUTED),
             text_field(url)
                 .placeholder(crate::res::str::add_placeholder())
-                .id("catalog-url"),
+                .id(day::id!(catalog_url)),
             when(
                 move || !error.get().is_empty(),
                 move || {
                     label(move || error.get())
                         .font(Font::Footnote)
                         .color(DANGER)
-                        .any()
                 },
-            )
-            .any(),
+            ),
             button(crate::res::str::btn_add_catalog())
                 .prominent()
                 .action(move || add(&url.get_untracked(), error))
-                .id("catalog-confirm"),
+                .id(day::id!(catalog_confirm)),
             label(crate::res::str::add_known()).font(Font::Headline),
-            column(PieceVec(presets))
-                .spacing(8.0)
-                .align(HAlign::Leading),
+            column(presets).spacing(Space::S).align(HAlign::Leading),
         ))
         .spacing(14.0)
         .align(HAlign::Leading)
-        .padding(16.0),
+        .padding(Space::L),
     )
-    .any()
 }
