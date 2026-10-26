@@ -1,0 +1,77 @@
+# App Fair — the walkthrough that produces the store's screenshots and checks the store works
+# end to end (https://daybrite.dev/docs/how-to/dayscript). It runs against the bundled MOCK
+# CATALOG (a small, tasteful subset of F-Droid), so it's fully offline and deterministic — no 50 MB
+# index download. CI runs it per target and per locale; run it locally with:
+#
+#     day launch -t android-material --script dayscript/walkthrough.yaml --env APP_FAIR_MOCK=1
+#
+# The mock catalog ranks nothing, so rows are ordered by recency and their indices are fixed:
+# Organic Maps = 3, Wikipedia = 4. Row ids are `app_row:<catalog>~<package>`, and the bundled
+# catalog is catalog 1.
+flow:
+  # The mock catalog seeds just after first paint; wait until a known app row is on screen so every
+  # shot is of a fully-populated store (identifiers are locale-independent, so en and fr match).
+  - wait_for: { id: tabs }
+  - wait_for: { id: "app_row:1~app.organicmaps" }
+  - wait_idle:
+  - screenshot: 01-browse
+
+  # Search narrows the list as you type, matching names, summaries and package ids.
+  - input: { id: search, text: "wiki" }
+  - wait_for: { id: "app_row:1~org.wikipedia" }
+  - assert_hidden: { id: "app_row:1~app.organicmaps" }
+  - input: { id: search, text: "" }
+  - wait_for: { id: "app_row:1~app.organicmaps" }
+
+  # An app's detail page: real icon, description, permissions, the pinned signing key, and Install.
+  - select: { id: app_list, index: 3 }
+  - wait_for: { id: detail_install }
+  - wait_idle:
+  - screenshot: 02-detail
+  - nav_back:
+  - wait_idle:
+
+  # Browse by category — the picker filters the list to a single category (7 = Internet).
+  - wait_for: { id: category_picker }
+  - select: { id: category_picker, index: 7 }
+  - wait_for: { id: "app_row:1~org.wikipedia" }
+  - assert_hidden: { id: "app_row:1~app.organicmaps" }
+  - wait_idle:
+  - screenshot: 03-category
+  - select: { id: category_picker, index: 0 }
+  - wait_for: { id: "app_row:1~app.organicmaps" }
+
+  # Settings: when App Fair checks for updates, and the catalogs it syncs.
+  - navigate: { route: settings/updates }
+  - wait_for: { id: pref_sync }
+  - wait_idle:
+  - screenshot: 04-settings
+  - navigate: { route: settings/catalogs }
+  - wait_for: { id: "repo_enabled:1" }
+
+  # Hiding an anti-feature takes the apps that declare it out of browsing, and back.
+  - navigate: { route: settings/filters }
+  - wait_for: { id: "anti:Tracking" }
+  - toggle: { id: "anti:Tracking" }
+  - navigate: { route: catalogs }
+  - wait_for: { id: "app_row:1~app.organicmaps" }
+  - assert_hidden: { id: "app_row:1~org.wikipedia" }
+  - navigate: { route: settings/filters }
+  - wait_for: { id: "anti:Tracking" }
+  - toggle: { id: "anti:Tracking" }
+
+  # A second detail — Wikipedia (index 4) — for variety in the gallery.
+  - navigate: { route: catalogs }
+  - wait_for: { id: "app_row:1~org.wikipedia" }
+  - select: { id: app_list, index: 4 }
+  - wait_for: { id: detail_install }
+  - wait_idle:
+  - screenshot: 05-wikipedia
+  - nav_back:
+  - wait_idle:
+
+  # Add a catalog: HTTPS-enforced URL entry plus a list of known repositories (debug builds).
+  - tap: { id: catalog_add }
+  - wait_for: { id: catalog_confirm }
+  - wait_idle:
+  - screenshot: 06-add-catalog

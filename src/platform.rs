@@ -35,9 +35,10 @@ day_platform_android::java_class! {
     },
 }
 
-/// The app's private data directory, resolved once and cached. JNI `FindClass` for app classes
-/// only works on the UI thread (a background thread gets the system classloader), so this must be
-/// first called from the main thread — `root()` does that before any sync thread starts.
+/// The app's private data directory (the catalog, the image cache, staged APKs), resolved once
+/// and cached. JNI `FindClass` for app classes only works on the UI thread (a background thread
+/// gets the system classloader), so this must be first called from the main thread — `root()`
+/// does that before any sync thread starts.
 #[cfg(target_os = "android")]
 pub fn data_dir() -> PathBuf {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -50,8 +51,17 @@ pub fn data_dir() -> PathBuf {
     .clone()
 }
 
+/// The app's data directory: `DAY_DATA_DIR` when a host or a test passes one, else Application
+/// Support inside the iOS sandbox, else (the desktop development build) a temporary directory.
 #[cfg(not(target_os = "android"))]
 pub fn data_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("DAY_DATA_DIR").filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir).join("app-fair");
+    }
+    #[cfg(target_os = "ios")]
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join("Library/Application Support/App Fair");
+    }
     std::env::temp_dir().join("app-fair")
 }
 
@@ -174,7 +184,7 @@ pub fn verifies_signatures() -> bool {
 #[cfg(target_os = "android")]
 fn on_main_blocking<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> Option<R> {
     let (tx, rx) = std::sync::mpsc::channel();
-    day_reactive::on_main(move || {
+    day::reactive::on_main(move || {
         let _ = tx.send(f());
     });
     rx.recv_timeout(std::time::Duration::from_secs(30)).ok()
@@ -327,7 +337,7 @@ pub fn tidy_permission(name: &str) -> String {
 #[cfg(target_os = "android")]
 pub fn install_apk(path: &str, label: &str) {
     let (path, label) = (path.to_string(), label.to_string());
-    day_reactive::on_main(move || {
+    day::reactive::on_main(move || {
         java(|env| {
             let (Ok(path), Ok(label)) = (env.new_string(&path), env.new_string(&label)) else {
                 crate::state::on_native_install_status(1, Some("bad path".into()));
@@ -365,7 +375,7 @@ pub extern "system" fn Java_org_appfair_app_appfair_DayInstaller_nativeInstallRe
 /// app's `DayInstaller` resolves.
 #[cfg(target_os = "android")]
 pub fn schedule_update_checks() {
-    day_reactive::on_main(|| {
+    day::reactive::on_main(|| {
         java(|env| DayInstaller::scheduleUpdateChecks(env));
     });
 }
@@ -394,7 +404,7 @@ pub extern "system" fn Java_org_appfair_app_appfair_UpdateWorker_nativeCheckUpda
                 Some((pkg.to_string(), code.trim().parse().ok()?))
             })
             .collect();
-        Ok(crate::sync::check_updates_now(&list) as i32)
+        Ok(crate::sync::check_updates_now(list) as i32)
     })
     .resolve::<day::android::jni::errors::ThrowRuntimeExAndDefault>()
 }

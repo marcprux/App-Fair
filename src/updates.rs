@@ -7,19 +7,17 @@ use day::async_image::ContentMode;
 use day::prelude::*;
 
 use crate::model::{AppDetail, AppSummary};
-use crate::state;
-use crate::{Nav, push_nav};
+use crate::ui::{ACCENT, PLACEHOLDER};
+use crate::{Nav, catalog, push_nav, settings, state};
 
 /// Fires the opt-in auto-update batch at most once per launch, so a re-render doesn't restart it.
 static AUTO_FIRED: AtomicBool = AtomicBool::new(false);
 
-const MUTED: Color = Color::hex(0x6B_6B_70);
-const PLACEHOLDER: Color = Color::hex(0xE3_E3_E8);
-const UPDATE: Color = Color::hex(0x2F_6F_DE);
-const OK: Color = Color::hex(0x2E7D32);
+/// "Up to date": a green that holds its contrast on light and dark rows.
+pub(crate) const OK: Color = Color::hex(0x34_A8_53);
 
 /// One installed app: its catalog summary + the on-device versionCode. `updatable` is derived.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Installed {
     app: AppSummary,
     installed_code: i64,
@@ -31,15 +29,15 @@ impl Installed {
     }
 }
 
-fn rows() -> Vec<Installed> {
-    let mut v: Vec<Installed> = state::installed_updates()
+/// The installed apps, updatable first, then alphabetical.
+fn sorted(installed: Vec<(AppSummary, i64)>) -> Vec<Installed> {
+    let mut v: Vec<Installed> = installed
         .into_iter()
         .map(|(app, installed_code)| Installed {
             app,
             installed_code,
         })
         .collect();
-    // Updatable first, then alphabetical.
     v.sort_by(|a, b| {
         b.updatable()
             .cmp(&a.updatable())
@@ -48,44 +46,51 @@ fn rows() -> Vec<Installed> {
     v
 }
 
-/// The full detail record for every updatable app, for a batch update (#8).
-fn updatable_details() -> Vec<AppDetail> {
-    rows()
+/// Install every updatable app in `rows`, one after another (#8), once their full records come
+/// back from the catalog.
+fn update_all(rows: Vec<Installed>) {
+    let wanted: Vec<(u64, String)> = rows
         .into_iter()
         .filter(Installed::updatable)
-        .filter_map(|i| {
-            state::with_db(|c| {
-                crate::db::detail(c, i.app.repo_id, &i.app.pkg)
-                    .ok()
-                    .flatten()
-            })
-        })
-        .collect()
+        .map(|i| (i.app.repo_id, i.app.pkg))
+        .collect();
+    let details = catalog::read(move |db| {
+        let mut out: Vec<AppDetail> = Vec::new();
+        for (repo_id, pkg) in wanted {
+            out.extend(catalog::detail(db, repo_id, &pkg)?);
+        }
+        Ok(out)
+    });
+    day::task(async move {
+        match details.await {
+            Ok(apps) => state::start_updates(apps),
+            Err(e) => error!("update all: {e}"),
+        }
+    });
 }
 
 pub fn updates_page(path: Signal<Vec<Nav>>) -> impl Piece {
-    let version = state::catalog_version();
+    let installed = state::installed_updates();
+    let rows = move || sorted(installed.get());
 
     // When auto-download is on, kick off the batch update once per launch as soon as the catalog
     // reports updates and nothing is already installing (#8).
     watch(
-        move || version.get(),
+        move || installed.get(),
         move |_, _| {
-            if crate::settings::auto_download()
+            let rows = sorted(installed.get_untracked());
+            if settings::AUTO_DOWNLOAD.get_untracked()
                 && !AUTO_FIRED.load(Ordering::Relaxed)
                 && !state::install_active()
+                && rows.iter().any(Installed::updatable)
             {
-                let apps = updatable_details();
-                if !apps.is_empty() {
-                    AUTO_FIRED.store(true, Ordering::Relaxed);
-                    state::start_updates(apps);
-                }
+                AUTO_FIRED.store(true, Ordering::Relaxed);
+                update_all(rows);
             }
         },
     );
 
     let summary = label(move || {
-        version.get();
         let all = rows();
         let n_update = all.iter().filter(|i| i.updatable()).count();
         if all.is_empty() {
@@ -97,47 +102,39 @@ pub fn updates_page(path: Signal<Vec<Nav>>) -> impl Piece {
         }
     })
     .font(Font::Footnote)
-    .color(MUTED)
+    .secondary()
     .grow_w()
     .id(day::id!(updates_summary));
 
     // "Update all" appears only while updates are pending; it installs them one after another.
-    let update_all = when(
-        move || {
-            version.get();
-            rows().iter().any(Installed::updatable)
-        },
+    let update_all_button = when(
+        move || rows().iter().any(Installed::updatable),
         move || {
             button(crate::res::str::btn_update_all())
                 .prominent()
-                .action(move || state::start_updates(updatable_details()))
+                .action(move || update_all(rows()))
                 .id(day::id!(update_all))
         },
     );
 
-    let header = row((summary, update_all))
+    let header = row((summary, update_all_button))
         .align(VAlign::Center)
         .spacing(Space::S);
 
     let list = list(
-        items(
-            move || {
-                version.get();
-                rows()
-            },
-            |i: &Installed| i.app.pkg.clone(),
-        ),
+        items(rows, |i: &Installed| {
+            catalog::app_key(i.app.repo_id, &i.app.pkg)
+        }),
         update_row,
     )
     .row_height(RowHeight::Uniform(72.0))
-    .on_select(move |pkg: String| {
-        // Look up the repo id for this package to push its detail.
-        if let Some(app) = state::with_db(|c| crate::db::summary_by_pkg(c, &pkg)) {
+    .on_select(move |key: String| {
+        if let Some((repo_id, pkg)) = catalog::parse_app_key(&key) {
             push_nav(
                 path,
                 Nav::App {
-                    repo_id: app.repo_id,
-                    pkg,
+                    repo_id,
+                    pkg: pkg.to_string(),
                 },
             );
         }
@@ -168,7 +165,7 @@ fn update_row(slot: ItemSlot<Installed, String>) -> impl Piece {
                 slot.with(|i| crate::res::str::status_update(i.app.version_name.clone()).format())
             })
             .font(Font::Caption)
-            .color(UPDATE)
+            .color(ACCENT)
         },
     )
     .otherwise(|| {
@@ -180,10 +177,14 @@ fn update_row(slot: ItemSlot<Installed, String>) -> impl Piece {
     row((
         icon,
         column((
-            label(move || slot.field(|i| i.app.name.clone())).font(Font::Body),
+            label(move || slot.field(|i| i.app.name.clone()))
+                .font(Font::Body)
+                .max_lines(1),
             label(move || slot.field(|i| i.app.summary.clone()))
                 .font(Font::Footnote)
-                .color(MUTED),
+                .secondary()
+                // The rows are a uniform height: two lines of summary is what fits.
+                .max_lines(2),
         ))
         .spacing(2.0)
         .align(HAlign::Leading)

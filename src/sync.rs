@@ -1,20 +1,24 @@
 //! Catalog sync. Fetches the small `entry.json` first: if the timestamp is unchanged (and so is the
 //! locale) the repo is up to date for one tiny request. Otherwise it obtains the new index —
 //! preferring an **incremental** JSON Merge Patch diff over a full re-download when `entry.json`
-//! offers one for our stored timestamp — caches the raw index, and applies it to SQLite with
-//! [`crate::db::upsert_index`]. Any problem with the diff falls back to a full download.
+//! offers one for our stored timestamp — caches the raw index, and applies it to the catalog with
+//! [`catalog::upsert_index`]. Any problem with the diff falls back to a full download.
+//!
+//! Each sync runs on its own thread and blocks on the catalog worker's replies, so the import,
+//! like the download, stays off the UI thread.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use diesel::sqlite::SqliteConnection;
+use day::prelude::*;
 
-use crate::cache;
+use crate::catalog::{self, block_on};
 use crate::fdroid::{Entry, FileRef, IndexV2};
 use crate::net::{self, Progress};
 use crate::state::{self, SyncUi};
+use crate::{cache, settings};
 
 /// The locale used to pick localized index fields — the device's, so catalog descriptions and
 /// screenshots match the device language. `fdroid::pick` falls back (e.g. `fr-FR` → `fr` → `en-US`
@@ -23,14 +27,38 @@ pub fn locale() -> String {
     crate::platform::device_locale()
 }
 
-/// Check every enabled repository for updates. Opening the DB ensures the default F-Droid repo
-/// exists, so first launch syncs it.
-pub fn sync_all_enabled() {
-    for repo in crate::state::repos() {
-        if repo.enabled {
-            start(repo.address.clone(), "index-v2.json".to_string());
-        }
+/// Check every enabled repository for updates, when the launch preference allows it. The
+/// catalog always holds the default repository, so a first launch syncs it.
+pub fn sync_at_launch() {
+    if settings::SYNC_ON_LAUNCH.get_untracked() {
+        sync_all_enabled();
     }
+}
+
+/// Check every enabled repository for updates.
+pub fn sync_all_enabled() {
+    let repos = catalog::read(catalog::repos);
+    day::task(async move {
+        match repos.await {
+            Ok(repos) => {
+                for repo in repos.into_iter().filter(|r| r.enabled) {
+                    start(repo.address, "index-v2.json".to_string());
+                }
+            }
+            Err(e) => error!("sync: {e}"),
+        }
+    });
+}
+
+/// Load the image loader's mirror map from the stored catalog.
+pub fn refresh_mirrors() {
+    let map = catalog::read(catalog::mirror_map);
+    day::task(async move {
+        match map.await {
+            Ok(map) => crate::icons::set_mirror_bases(map),
+            Err(e) => warn!("mirrors: {e}"),
+        }
+    });
 }
 
 /// A background update check (#7): sync every enabled repo, then count how many of `installed`
@@ -39,24 +67,21 @@ pub fn sync_all_enabled() {
 /// errors on any one repo are ignored so a single unreachable mirror doesn't sink the whole check.
 // Called only from the Android `UpdateWorker` JNI export; dead on desktop/mock builds.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
-pub fn check_updates_now(installed: &[(String, i64)]) -> i64 {
-    let repos = match crate::db::open(&state::db_path()) {
-        Ok(mut conn) => crate::db::repos(&mut conn).unwrap_or_default(),
-        Err(_) => return 0,
-    };
+pub fn check_updates_now(installed: Vec<(String, i64)>) -> i64 {
+    let repos = block_on(catalog::read(catalog::repos)).unwrap_or_default();
     for repo in repos.iter().filter(|r| r.enabled) {
         let _ = run(&repo.address, "index-v2.json");
     }
-    let mut conn = match crate::db::open(&state::db_path()) {
-        Ok(conn) => conn,
-        Err(_) => return 0,
-    };
-    installed
-        .iter()
-        .filter(|(pkg, code)| {
-            crate::db::summary_by_pkg(&mut conn, pkg).is_some_and(|s| s.version_code > *code)
-        })
-        .count() as i64
+    block_on(catalog::read(move |db| {
+        let mut n = 0;
+        for (pkg, code) in installed {
+            if catalog::summary_by_pkg(db, &pkg)?.is_some_and(|s| s.version_code > code) {
+                n += 1;
+            }
+        }
+        Ok(n)
+    }))
+    .unwrap_or_default()
 }
 
 /// Sync one repository in the background. `address` is the base (no index filename); `index_file`
@@ -73,20 +98,21 @@ pub fn start(address: String, index_file: String) {
 fn run(address: &str, index_file: &str) -> Result<(), String> {
     state::set_sync(SyncUi::Checking);
 
-    // Our own connection for this thread (WAL lets the main thread keep reading).
-    let mut conn = crate::db::open(&state::db_path()).map_err(|e| format!("db: {e}"))?;
-    let repo_id = crate::db::ensure_repo(&mut conn, address).map_err(|e| format!("db: {e}"))?;
-    let stored = crate::db::repo_timestamp(&mut conn, repo_id);
+    let owned = address.to_string();
+    let repo = block_on(catalog::write(move |db| {
+        let id = catalog::ensure_repo(db, &owned)?;
+        catalog::repo(db, id)
+    }))
+    .map_err(|e| format!("db: {e}"))?
+    .ok_or_else(|| "db: the catalog was removed".to_string())?;
+    let stored = repo.timestamp;
     let locale = locale();
-    let synced_locale = crate::db::get_meta(&mut conn, "catalog_locale").unwrap_or_default();
-    let locale_changed = synced_locale != locale;
-    // A stored-shape upgrade (e.g. gaining `rank`) forces a re-import so the new field backfills.
-    let synced_epoch = crate::db::get_meta(&mut conn, "catalog_epoch").unwrap_or_default();
-    let epoch_changed = synced_epoch != crate::db::CATALOG_EPOCH;
-    let reimport = locale_changed || epoch_changed;
-    let fingerprint = crate::db::repo_fingerprint(&mut conn, repo_id);
+    // A locale change re-picks every localized field; a stored-shape upgrade (a field App Fair
+    // newly reads) re-imports so the new field fills in.
+    let reimport = repo.synced_locale != locale || repo.synced_epoch != catalog::CATALOG_EPOCH;
+    let fingerprint = repo.fingerprint.clone();
     // The primary host followed by any mirrors this repo declared, tried in order (#12).
-    let bases = net::bases(address, &crate::db::repo_mirrors(&mut conn, repo_id));
+    let bases = net::bases(address, &repo.mirrors);
 
     // entry: the current index pointer + available diffs. Verified via the signed entry.jar when a
     // fingerprint is pinned (#1); a pinned repo whose signature fails is an error, never a silent
@@ -110,7 +136,7 @@ fn run(address: &str, index_file: &str) -> Result<(), String> {
         && let Some(cached) = cache::read_index(address)
         && let Ok(index) = serde_json::from_slice::<IndexV2>(&cached)
     {
-        return finish(&mut conn, repo_id, &index, &locale, true);
+        return finish(repo.id, index, &locale, true);
     }
 
     // Obtain the new index (incremental diff when possible, else full), cache it, and apply.
@@ -127,7 +153,7 @@ fn run(address: &str, index_file: &str) -> Result<(), String> {
     cache::write_index(address, &bytes);
 
     state::set_sync(SyncUi::Building);
-    finish(&mut conn, repo_id, &index, &locale, reimport)
+    finish(repo.id, index, &locale, reimport)
 }
 
 /// Fetch the repo's entry: the verified signed `entry.jar` when a fingerprint is pinned (and this
@@ -149,39 +175,22 @@ fn fetch_entry(bases: &[String], fingerprint: &str) -> Result<Option<Entry>, Str
     }
 }
 
-/// Store the index and record the sync locale.
-fn finish(
-    conn: &mut SqliteConnection,
-    repo_id: i64,
-    index: &IndexV2,
-    locale: &str,
-    force: bool,
-) -> Result<(), String> {
-    let changed = crate::db::upsert_index(conn, repo_id, index, locale, force)
-        .map_err(|e| format!("store: {e}"))?;
-    // Record the locale this catalog data was picked for, so a later locale change is detected, and
-    // the stored-shape epoch, so a later App Fair upgrade knows this data predates a new field.
-    let _ = crate::db::set_meta(conn, "catalog_locale", locale);
-    let _ = crate::db::set_meta(conn, "catalog_epoch", crate::db::CATALOG_EPOCH);
-    // Refresh the icon loader's mirror-fallback map from the current repos, so icons/screenshots a
-    // metadata-only repo doesn't host fall back to its mirrors (#12). Done before the catalog bump
-    // that re-renders the list (and requests icons).
-    crate::icons::set_mirror_bases(mirror_map(conn));
+/// Import the index in one catalog transaction. The import records the locale and the
+/// stored-shape epoch it ran under, so a later locale change or App Fair upgrade is detected.
+fn finish(repo_id: u64, index: IndexV2, locale: &str, force: bool) -> Result<(), String> {
+    let locale = locale.to_string();
+    let (changed, mirrors) = block_on(catalog::write(move |db| {
+        let changed = catalog::upsert_index(db, repo_id, &index, &locale, force)?;
+        Ok((changed, catalog::mirror_map(db)?))
+    }))
+    .map_err(|e| format!("store: {e}"))?;
+    // Refresh the icon loader's mirror-fallback map, so icons and screenshots a metadata-only
+    // repo doesn't host fall back to its mirrors (#12). Done before the catalog bump that
+    // re-renders the list (and requests icons).
+    crate::icons::set_mirror_bases(mirrors);
     state::bump_catalog();
     state::set_sync(SyncUi::Done(changed));
     Ok(())
-}
-
-/// Each repo's address paired with its mirror bases (primary-first), for the icon loader's image
-/// fallback. Called after a sync and once at startup (from the cached catalog) so image fallback
-/// is ready before the first icons are requested.
-pub(crate) fn mirror_map(conn: &mut SqliteConnection) -> Vec<(String, Vec<String>)> {
-    let mut out = Vec::new();
-    for r in crate::db::repos(conn).unwrap_or_default() {
-        let mirrors = crate::db::repo_mirrors(conn, r.id);
-        out.push((r.address, mirrors));
-    }
-    out
 }
 
 /// Get the current index bytes + parsed index. Prefers an incremental diff (`entry.diffs[stored]`)

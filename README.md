@@ -3,9 +3,10 @@
 An open, privacy-respecting app store for F-Droid–compatible catalogs, built with
 [Day](https://daybrite.dev) — one Rust codebase, native widgets on every platform.
 
-App Fair syncs F-Droid Index V2 catalogs into on-device SQLite, then lets you browse, search,
-and switch between catalogs and install, update, and launch apps. It talks only to the catalogs
-you add: no accounts, no analytics, and nothing about what you browse or install leaves the device.
+App Fair syncs F-Droid Index V2 catalogs into an on-device SQLite store, then lets you browse,
+search, and switch between catalogs and install, update, and launch apps. It talks only to the
+catalogs you add. There are no accounts or analytics, and what you browse or install stays on the
+device.
 
 ## What's inside
 
@@ -17,23 +18,28 @@ above everything.
 - `src/detail.rs` — an app's detail page (icon, description, permissions, signing key, Install).
 - `src/install.rs` / `src/install_sheet.rs` — download-verify-install orchestration and its sheet.
 - `src/updates.rs` — the Updates tab and background update checks.
-- `src/settings.rs` / `src/catalogs_add.rs` — catalogs, preferences, anti-feature filters, add-catalog.
-- `src/db.rs` / `src/schema.rs` / `src/model.rs` — the on-device catalog (Diesel + bundled SQLite).
+- `src/settings.rs` / `src/catalogs_add.rs` — Settings pages (catalogs, update checks, anti-feature
+  filters, the image cache, About) and the add-catalog page.
+- `src/catalog.rs` — the on-device catalog: [day-persistence](https://github.com/daybrite/day-persistence)
+  models over bundled SQLite, owned by one database worker so imports and searches stay off the UI
+  thread. `src/model.rs` holds the values the worker hands to the pages.
 - `src/fdroid.rs` / `src/net.rs` / `src/sync.rs` — F-Droid Index V2 parsing, HTTP, and catalog sync.
 - `src/platform.rs` + `android/java/.../DayInstaller.java` — the Android install/query bridge.
+- `resource/icons/icon.svg` — the app icon; `day prepare` renders every platform's icons from it.
 - `resource/locales/{en,fr}/app.ftl` — every user-facing string ([localization](https://daybrite.dev/docs/localization)).
 - `mock/` — a bundled offline catalog for deterministic screenshots (`--env APP_FAIR_MOCK=1`).
-- `Day.toml` / `Cargo.toml` — app metadata, targets, signing, and dependencies.
+- `store/storefront.toml` — the App Store and Google Play listing, in English and French.
+- `Day.toml` / `Cargo.toml` — app metadata, targets, permissions, signing, and dependencies.
 
 ## Build and run
 
-`day launch --git` clones this repo, builds it, and runs it — no checkout needed. App Fair installs
-Android packages, so name that target rather than taking the desktop default:
+`day launch --git` clones this repo, builds it, and runs it, with no checkout needed. App Fair
+installs Android packages, so name that target rather than taking the desktop default:
 
 ```sh
 cargo install day-cli
 day doctor                                             # what's installed, what's missing
-day launch --git https://github.com/marcprux/App-Fair.git -p android-material
+day launch --git https://github.com/marcprux/App-Fair.git -t android-material
 ```
 
 `day doctor` prints the fix for anything it can't find. `day launch --git` prints where it put the
@@ -43,8 +49,9 @@ From inside a clone, name the target directly — Day compiles one backend per b
 CLI supplies the right feature:
 
 ```sh
-day launch -p android-material      # build + run on a device/emulator
-day launch -p android-material --script dayscript/ci.yaml --env APP_FAIR_MOCK=1   # scripted, offline
+day launch -t android-material      # build + run on a device/emulator
+day launch -t android-material --script dayscript/walkthrough.yaml --env APP_FAIR_MOCK=1   # scripted, offline
+cargo test                          # the catalog, sync, and parsing tests
 ```
 
 ## Release
@@ -55,8 +62,8 @@ Signing keys are referenced from `Day.toml` (`[signing.android]`) via environmen
 export DAY_ANDROID_KEYSTORE=/path/to/keystore.jks DAY_ANDROID_KEY_ALIAS=app \
        DAY_KS_PASS=… DAY_KEY_PASS=…
 day sign --check                               # confirm the config resolves
-day pack -p android-material --profile release   # signed app-fair-<version>-android-material.apk + .aab in build/day/dist/
+day pack -t android-material                   # signed .apk + .aab in build/day/dist/
+day store stage                                # the Play and App Store listings, ready for fastlane
 ```
 
-Play Store listing metadata and the `supply` dry run live in [`android/fastlane/`](android/fastlane).
 See [`RELEASE.md`](RELEASE.md) for the full release checklist and the Google Play policy review notes.

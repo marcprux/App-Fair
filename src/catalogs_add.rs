@@ -6,10 +6,10 @@
 use day::prelude::*;
 
 use crate::model::split_index_url;
-use crate::{db, state, sync};
+use crate::{catalog, state, sync};
 
-const MUTED: Color = Color::hex(0x6B_6B_70);
-const DANGER: Color = Color::hex(0xC6_28_28);
+/// The error line's red, which holds its contrast on light and dark grounds.
+const DANGER: Color = Color::hex(0xE5_48_4D);
 
 /// Known repositories, each with its published signing-cert fingerprint pinned via `?fingerprint=`.
 const PRESETS: &[(&str, &str)] = &[
@@ -64,14 +64,17 @@ fn add(raw: &str, error: Signal<String>) {
         return;
     }
     let (base, file) = split_index_url(&clean);
-    state::with_db(|conn| {
-        if let Ok(id) = db::ensure_repo(conn, &base)
-            && !fingerprint.is_empty()
-        {
-            let _ = db::set_repo_fingerprint(conn, id, &fingerprint.to_lowercase());
+    let address = base.clone();
+    let fingerprint = fingerprint.to_lowercase();
+    state::write(move |db| {
+        let id = catalog::ensure_repo(db, &address)?;
+        if fingerprint.is_empty() {
+            Ok(())
+        } else {
+            catalog::set_repo_fingerprint(db, id, &fingerprint)
         }
     });
-    state::bump_catalog();
+    // The worker answers in order, so the sync reads the pinned fingerprint written above.
     sync::start(base, file);
     nav_back();
 }
@@ -95,7 +98,7 @@ pub fn add_catalog_page() -> impl Piece {
             label(crate::res::str::add_title()).font(Font::Title),
             label(crate::res::str::add_blurb())
                 .font(Font::Footnote)
-                .color(MUTED),
+                .secondary(),
             text_field(url)
                 .placeholder(crate::res::str::add_placeholder())
                 .id(day::id!(catalog_url)),

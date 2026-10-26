@@ -4,43 +4,52 @@
 
 use day::async_image::{ContentMode, async_image};
 use day::prelude::*;
+use day::reactive::Resource;
 
 use crate::model::AppDetail;
-use crate::{db, icons, platform, state};
+use crate::ui::{ACCENT, PLACEHOLDER};
+use crate::updates::OK;
+use crate::{catalog, icons, platform, res, state};
 
-const MUTED: Color = Color::hex(0x6B_6B_70);
-const TEXT: Color = Color::hex(0x1B_1B_20);
-const WARN: Color = Color::hex(0xB4_6A_00);
-const ACCENT: Color = Color::hex(0x2F_6F_DE);
-const OK: Color = Color::hex(0x2E7D32);
-const DANGER: Color = Color::hex(0xC6_28_28);
-/// Card fills behind a tappable permission (neutral) / anti-feature (warm) row.
-const CARD: Color = Color::hex(0xF2_F3_F7);
-const CARD_WARN: Color = Color::hex(0xFB_EF_DE);
+/// Anti-feature amber and incompatibility red, each holding its contrast on light and dark grounds.
+const WARN: Color = Color::hex(0xD8_8A_0B);
+pub(crate) const DANGER: Color = Color::hex(0xE5_48_4D);
+/// The neutral glyph tint (the trailing info mark).
+const GLYPH: Color = Color::rgba(0.5, 0.5, 0.55, 1.0);
 
-pub fn detail_page(repo_id: i64, pkg: String) -> AnyPiece {
-    let Some(app) = state::with_db(|conn| db::detail(conn, repo_id, &pkg).ok().flatten()) else {
-        return column((label(crate::res::str::app_not_found()).font(Font::Title),))
+pub fn detail_page(repo_id: u64, pkg: String) -> impl Piece {
+    let detail = Resource::new(
+        || (),
+        move |_| {
+            let pkg = pkg.clone();
+            catalog::read(move |db| catalog::detail(db, repo_id, &pkg))
+        },
+    );
+    load(detail, |app: Loaded<Option<AppDetail>>| match app.get() {
+        Some(app) => detail_body(&app),
+        None => column((label(res::str::app_not_found()).font(Font::Title),))
             .padding(Space::L)
-            .any();
-    };
+            .any(),
+    })
+    .loading(|| column((spinner(),)).padding(Space::L))
+}
 
+fn detail_body(app: &AppDetail) -> AnyPiece {
     // Compatibility is fixed for a given device + app version, so compute it once. `min_sdk == 0`
     // (repo didn't declare one) or `device_sdk == 0` (unknown/off-device) → don't block.
     let device_sdk = platform::device_sdk();
     let compatible = app.min_sdk == 0 || device_sdk == 0 || app.min_sdk <= device_sdk;
-
     scroll(
         column((
-            header(&app, compatible),
-            compatibility(&app, device_sdk),
-            manage(&app),
-            screenshots(&app),
-            description(&app),
-            whats_new(&app),
-            permissions(&app),
-            anti_features(&app),
-            links(&app),
+            header(app, compatible),
+            compatibility(app, device_sdk),
+            manage(app),
+            screenshots(app),
+            description(app),
+            whats_new(app),
+            permissions(app),
+            anti_features(app),
+            links(app),
         ))
         .spacing(18.0)
         .align(HAlign::Leading)
@@ -57,7 +66,7 @@ fn header(app: &AppDetail, compatible: bool) -> impl Piece {
             .frame(64.0, 64.0)
             .any(),
         None => rounded_rectangle(14.0)
-            .fill(Color::hex(0xE3_E3_E8))
+            .fill(PLACEHOLDER)
             .frame(64.0, 64.0)
             .any(),
     };
@@ -69,12 +78,12 @@ fn header(app: &AppDetail, compatible: bool) -> impl Piece {
     let author_line: AnyPiece = if app.author.is_empty() {
         label(crate::res::str::unknown_author())
             .font(Font::Footnote)
-            .color(MUTED)
+            .secondary()
             .any()
     } else if app.author_website.is_empty() {
         label(app.author.clone())
             .font(Font::Footnote)
-            .color(MUTED)
+            .secondary()
             .any()
     } else {
         link(app.author.clone(), app.author_website.clone())
@@ -106,7 +115,7 @@ fn header(app: &AppDetail, compatible: bool) -> impl Piece {
         column((
             label(name).font(Font::Headline),
             author_line,
-            label(version_line).font(Font::Footnote).color(MUTED),
+            label(version_line).font(Font::Footnote).secondary(),
         ))
         .spacing(3.0)
         .align(HAlign::Leading)
@@ -188,21 +197,17 @@ fn compatibility(app: &AppDetail, device_sdk: i64) -> Option<impl Piece> {
     }
     let compatible = app.min_sdk <= device_sdk;
     let (icon, text, color) = if compatible {
-        (
-            crate::res::images::ic_ok,
-            crate::res::str::compatible_yes(),
-            OK,
-        )
+        (res::vectors::compatible, res::str::compatible_yes(), OK)
     } else {
         (
-            crate::res::images::ic_incompat,
-            crate::res::str::compatible_needs(android_release(app.min_sdk)),
+            res::vectors::incompatible,
+            res::str::compatible_needs(android_release(app.min_sdk)),
             DANGER,
         )
     };
     Some(
         row((
-            image(icon).frame(20.0, 20.0),
+            vector(icon).tint(color).frame(20.0, 20.0),
             label(text).font(Font::Footnote).color(color).grow_w(),
         ))
         .spacing(Space::S)
@@ -213,18 +218,31 @@ fn compatibility(app: &AppDetail, device_sdk: i64) -> Option<impl Piece> {
 /// Source + uninstall controls, shown only when App Fair installed this app and it's still on the
 /// device (#9). Rebuilds on catalog changes so it disappears once the app is uninstalled.
 fn manage(app: &AppDetail) -> impl Piece {
+    let version = state::catalog_version();
+    let pkg = app.pkg.clone();
+    // The catalog App Fair installed this app from, by name; `None` when App Fair did not.
+    let source = state::snapshot(
+        None,
+        move || version.get(),
+        move |_| {
+            let pkg = pkg.clone();
+            catalog::read(move |db| match catalog::install_source(db, &pkg)? {
+                Some(repo) => Ok(Some(catalog::repo_name(db, repo)?)),
+                None => Ok(None),
+            })
+        },
+    );
     let app = app.clone();
     keyed(
-        move || Some(state::catalog_version().get()),
-        move |_| manage_body(&app),
+        move || Some((source.get(), version.get())),
+        move |(source, _)| manage_body(&app, source.clone()),
     )
 }
 
-fn manage_body(app: &AppDetail) -> Option<impl Piece + use<>> {
+fn manage_body(app: &AppDetail, source: Option<String>) -> Option<impl Piece + use<>> {
     // Only when App Fair has a record of installing this app and it's still on the device.
-    let repo_id = state::with_db(|conn| db::install_source(conn, &app.pkg))?;
+    let source = source?;
     platform::installed_version(&app.pkg)?;
-    let source = state::with_db(|conn| db::repo_name(conn, repo_id));
     let source_text = if source.is_empty() {
         crate::res::str::installed_by_app_fair()
     } else {
@@ -244,11 +262,8 @@ fn manage_body(app: &AppDetail) -> Option<impl Piece + use<>> {
                     Ok(()) => {
                         // Hand ownership back to the user: forget our record and let the button and
                         // this section refresh (the app leaves the device after the system prompt).
-                        state::with_db(|conn| {
-                            let _ = db::remove_install(conn, &pkg);
-                        });
                         state::bump_installed();
-                        state::bump_catalog();
+                        state::write(move |db| catalog::remove_install(db, &pkg));
                     }
                     Err(e) => {
                         alert(crate::res::str::uninstall_fail_title(name))
@@ -264,10 +279,7 @@ fn manage_body(app: &AppDetail) -> Option<impl Piece + use<>> {
 
     Some(
         row((
-            label(source_text)
-                .font(Font::Footnote)
-                .color(MUTED)
-                .grow_w(),
+            label(source_text).font(Font::Footnote).secondary().grow_w(),
             uninstall.id(day::id!(detail_uninstall)),
         ))
         .spacing(Space::M)
@@ -402,7 +414,7 @@ fn permissions(app: &AppDetail) -> Option<impl Piece> {
             let (title, desc) = platform::permission_info(p);
             let raw = p.clone();
             let dialog_title = title.clone();
-            info_row(crate::res::images::ic_perm, title, TEXT, CARD, move || {
+            info_row(res::vectors::permission, ACCENT, title, None, move || {
                 let (dialog_title, desc, raw) = (dialog_title.clone(), desc.clone(), raw.clone());
                 day::task(async move {
                     let sys = crate::res::str::perm_system_label().format();
@@ -437,10 +449,10 @@ fn anti_features(app: &AppDetail) -> Option<impl Piece> {
             let (name, desc) = (af.name.clone(), af.description.clone());
             let dialog_title = name.clone();
             info_row(
-                crate::res::images::ic_anti,
-                name,
+                res::vectors::anti_feature,
                 WARN,
-                CARD_WARN,
+                name,
+                Some(WARN),
                 move || {
                     let (dialog_title, desc) = (dialog_title.clone(), desc.clone());
                     day::task(async move {
@@ -465,25 +477,28 @@ fn anti_features(app: &AppDetail) -> Option<impl Piece> {
     ))
 }
 
-/// One styled, tappable row: a leading category icon, the title, and a trailing info glyph that
-/// signals the row opens a details dialog. `card` is the rounded background fill.
+/// One tappable card: a leading category glyph, the title (in `title_color`, else the label
+/// color), and a trailing info glyph that signals the row opens a details dialog.
 fn info_row(
-    icon: impl Into<day::ImageName>,
+    icon: VectorName,
+    tint: Color,
     title: String,
-    title_color: Color,
-    card: Color,
+    title_color: Option<Color>,
     on_tap: impl Fn() + 'static,
 ) -> impl Piece {
+    let title = label(title).font(Font::Body);
     row((
-        image(icon.into()).frame(24.0, 24.0),
-        label(title).font(Font::Body).color(title_color).grow_w(),
-        image(crate::res::images::ic_info).frame(18.0, 18.0),
+        vector(icon).tint(tint).frame(24.0, 24.0),
+        match title_color {
+            Some(color) => title.color(color),
+            None => title,
+        }
+        .grow_w(),
+        vector(res::vectors::info).tint(GLYPH).frame(18.0, 18.0),
     ))
     .spacing(Space::M)
     .align(VAlign::Center)
-    .padding(Insets::symmetric(12.0, 10.0))
-    .background(card)
-    .corner_radius(12.0)
+    .card()
     .on_tap(on_tap)
 }
 
@@ -492,7 +507,7 @@ fn links(app: &AppDetail) -> impl Piece {
         (!app.license.is_empty()).then(|| {
             label(crate::res::str::license_line(app.license.clone()))
                 .font(Font::Footnote)
-                .color(MUTED)
+                .secondary()
         }),
         // Website and Source are URLs — render them as links that open the system browser.
         (!app.website.is_empty()).then(|| {
@@ -513,13 +528,13 @@ fn links(app: &AppDetail) -> impl Piece {
         }),
         label(crate::res::str::package_line(app.pkg.clone()))
             .font(Font::Footnote)
-            .color(MUTED),
+            .secondary(),
         // The pinned signing key (#3): its first bytes are enough for a user to recognize the signer
         // across updates without a wall of hex.
         (!app.signer.is_empty()).then(|| {
             label(crate::res::str::signed_by(short_fingerprint(&app.signer)))
                 .font(Font::Footnote)
-                .color(MUTED)
+                .secondary()
         }),
     ))
     .align(HAlign::Leading)

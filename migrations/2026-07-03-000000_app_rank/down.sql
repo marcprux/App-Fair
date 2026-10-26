@@ -1,2 +1,0 @@
-DROP INDEX apps_rank;
-ALTER TABLE apps DROP COLUMN rank;

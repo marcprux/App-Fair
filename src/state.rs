@@ -1,31 +1,28 @@
-//! App-wide state: the reactive signals the pages read, the SQLite connection the main thread
-//! queries, and the `Setter`s background work uses to push results back. Signals live in a
-//! detached scope so they outlive the page that first reads them; the setters are stored globally
-//! because a download thread or the install callback needs them from off the main thread.
+//! App-wide state: the reactive signals the pages read, the snapshots of catalog reads they
+//! show, and the `Setter`s background work uses to push results back. App-wide signals live in
+//! the root scope so they outlive the page that first reads them; the setters are stored
+//! globally because a download thread or the install callback needs them from off the main
+//! thread.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::convert::Infallible;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use day::prelude::*;
-use diesel::sqlite::SqliteConnection;
+use day::reactive::Resource;
+use day_persistence::{DbError, ModelContainer};
 
-use crate::db;
+use crate::catalog;
 use crate::model::{AppDetail, AppSummary, Category, RepoRow, SortOrder};
 use crate::platform;
 
 /// Remaining apps in a "Update all" batch — each installs after the previous reaches a terminal
 /// state (#8). Empty for a normal single install, so it never affects that path.
 static UPDATE_QUEUE: Mutex<Vec<AppDetail>> = Mutex::new(Vec::new());
-
-/// The default catalog: the App Fair Index V2 repository.
-pub const DEFAULT_INDEX_URL: &str = "https://appfair.net/repo/index-v2.json";
-
-/// The App Fair repo's pinned signing-certificate fingerprint (SHA-256 of the signing cert, the
-/// value `verifyEntryJar` derives), so the default catalog's signed index is verified (#1).
-const DEFAULT_FINGERPRINT: &str =
-    "ddbbea5229957f75299c485d3b831ac30598459ad2ac69c293867163b4ed3c71";
 
 /// Progress of a catalog sync, shown in the list header.
 #[derive(Clone, Debug, PartialEq)]
@@ -70,7 +67,7 @@ pub struct Scene {
     query: Signal<String>,
     category: Signal<Option<String>>,
     /// The catalog to browse (`None` = all enabled catalogs).
-    repo_filter: Signal<Option<i64>>,
+    repo_filter: Signal<Option<u64>>,
     /// The catalog list's sort order (the sort drop-down).
     sort: Signal<SortOrder>,
 }
@@ -94,37 +91,41 @@ fn scene() -> Scene {
         .expect("no window is open, so there is no Scene to act on")
 }
 
-/// The APP's state: one catalog database, one sync, one install at a time. Every window reads
-/// the same — a download in one window is the same download in the other.
+/// The APP's state: one catalog, one sync, one install at a time. Every window reads the same
+/// — a download in one window is the same download in the other.
 #[derive(Clone, Copy)]
 struct AppState {
+    /// Bumped after every committed catalog write; every catalog snapshot refetches on it.
     catalog_version: Signal<u64>,
     sync: Signal<SyncUi>,
     install: Signal<Option<InstallUi>>,
+    repos: Signal<Vec<RepoRow>>,
+    categories: Signal<Vec<Category>>,
 }
 
 impl Ambient for AppState {
     fn create() -> Self {
+        let catalog_version = Signal::new(0);
         let st = AppState {
-            catalog_version: Signal::new(0),
+            catalog_version,
             sync: Signal::new(SyncUi::Idle),
             install: Signal::new(None),
+            repos: snapshot(
+                Vec::new(),
+                move || catalog_version.get(),
+                |_| catalog::read(catalog::repos),
+            ),
+            categories: snapshot(
+                Vec::new(),
+                move || catalog_version.get(),
+                |_| catalog::read(catalog::categories),
+            ),
         };
         // Cross-thread write handles for the sync and install workers.
         let _ = SYNC_SETTER.set(st.sync.setter());
         let _ = INSTALL_SETTER.set(st.install.setter());
         let _ = CATALOG_SETTER.set(st.catalog_version.setter());
         st
-    }
-}
-
-/// The main-thread SQLite handle, opened once for the process. A connection, not state.
-#[derive(Clone)]
-struct Database(std::rc::Rc<RefCell<Option<SqliteConnection>>>);
-
-impl Ambient for Database {
-    fn create() -> Self {
-        Database(std::rc::Rc::new(RefCell::new(None)))
     }
 }
 
@@ -140,7 +141,7 @@ struct InFlight {
     name: String,
     /// The catalog this app is being installed from, recorded on success so App Fair knows it owns
     /// the install and which source it came from (#9).
-    repo_id: i64,
+    repo_id: u64,
     /// The downloaded APK on disk, deleted once the install reaches a terminal state.
     apk_path: PathBuf,
 }
@@ -152,7 +153,7 @@ pub fn query() -> Signal<String> {
 pub fn category() -> Signal<Option<String>> {
     scene().category
 }
-pub fn repo_filter() -> Signal<Option<i64>> {
+pub fn repo_filter() -> Signal<Option<u64>> {
     scene().repo_filter
 }
 pub fn sort_order() -> Signal<SortOrder> {
@@ -178,64 +179,140 @@ pub fn install_active() -> bool {
     })
 }
 
-// --- database (main thread) --------------------------------------------------
+// --- the catalog (owned by its worker) --------------------------------------------------------
 
-/// The catalog file location: `<app data>/catalog.db`.
-pub fn db_path() -> PathBuf {
-    platform::data_dir().join("catalog.db")
+/// A signal holding what `fetch` last produced for `source`'s current value. The fetch runs
+/// again whenever the source changes (every source here reads [`catalog_version`], so every
+/// committed catalog write refreshes it), and the previous value stays on screen while the
+/// next one loads. A superseded fetch never lands.
+pub fn snapshot<S, T, F>(
+    initial: T,
+    source: impl Fn() -> S + 'static,
+    fetch: impl Fn(S) -> F + 'static,
+) -> Signal<T>
+where
+    S: Clone + PartialEq + 'static,
+    T: 'static,
+    F: Future<Output = Result<T, DbError>> + 'static,
+{
+    let value = Signal::new(initial);
+    Resource::new(source, move |s| {
+        let fetched = fetch(s);
+        async move {
+            match fetched.await {
+                Ok(v) => value.set(v),
+                Err(e) => warn!("catalog read failed: {e}"),
+            }
+            Ok::<(), Infallible>(())
+        }
+    });
+    value
 }
 
-/// Run a closure against the main-thread SQLite connection, opening it on first use. Diesel takes
-/// `&mut` for queries, so the closure does too.
-pub fn with_db<R>(f: impl FnOnce(&mut SqliteConnection) -> R) -> R {
-    let handle = Database::app().0;
-    {
-        let cell = &handle;
-        if cell.borrow().is_none() {
-            let path = db_path();
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            match db::open(&path) {
-                Ok(mut conn) => {
-                    // The default catalog exists from first launch (empty until first sync), with
-                    // the App Fair repo's signing fingerprint pinned so its index is verified (#1).
-                    let base = crate::model::split_index_url(DEFAULT_INDEX_URL).0;
-                    if let Ok(id) = db::ensure_repo(&mut conn, &base)
-                        && db::repo_fingerprint(&mut conn, id).is_empty()
-                    {
-                        let _ = db::set_repo_fingerprint(&mut conn, id, DEFAULT_FINGERPRINT);
-                    }
-                    *cell.borrow_mut() = Some(conn);
-                }
-                Err(e) => error!("db open failed: {e}"),
-            }
+/// Run `f` as one catalog transaction, then refresh every page that reads the catalog.
+pub fn write(f: impl FnOnce(&ModelContainer) -> Result<(), DbError> + Send + 'static) {
+    let committed = catalog::write(f);
+    day::task(async move {
+        match committed.await {
+            Ok(()) => bump_catalog(),
+            Err(e) => error!("catalog write failed: {e}"),
         }
-        f(cell.borrow_mut().as_mut().expect("db"))
+    });
+}
+
+/// Every catalog, for the catalog switcher and Settings.
+pub fn repos() -> Signal<Vec<RepoRow>> {
+    AppState::app().repos
+}
+
+/// The enabled catalogs' categories, for the category filter.
+pub fn categories() -> Signal<Vec<Category>> {
+    AppState::app().categories
+}
+
+/// The apps this window's browse state selects.
+pub fn search_results() -> Signal<Vec<AppSummary>> {
+    let scene = scene();
+    let version = catalog_version();
+    snapshot(
+        Vec::new(),
+        move || {
+            let search = catalog::Search {
+                query: scene.query.get(),
+                category: scene.category.get(),
+                repo: scene.repo_filter.get(),
+                exclude_anti: crate::settings::excluded_anti_features(),
+                sort: scene.sort.get(),
+                // The device locale drives the "Name" collation; cached, so this is cheap.
+                locale: platform::device_locale(),
+            };
+            (search, version.get())
+        },
+        |(search, _)| {
+            let found = catalog::read(move |db| catalog::search(db, &search));
+            async move {
+                let found = found.await?;
+                remember_names(&found);
+                Ok(found)
+            }
+        },
+    )
+}
+
+/// Installed user apps that are also in the catalog, each with its on-device versionCode. The
+/// slow package enumeration is cached (see [`cached_installed_packages`]); the catalog lookups
+/// run again on every catalog change, so a sync's newer versions show up.
+pub fn installed_updates() -> Signal<Vec<(AppSummary, i64)>> {
+    let version = catalog_version();
+    snapshot(
+        Vec::new(),
+        move || version.get(),
+        |_| {
+            let installed = cached_installed_packages();
+            let found = catalog::read(move |db| {
+                let mut out = Vec::new();
+                for (pkg, code) in installed {
+                    if let Some(s) = catalog::summary_by_pkg(db, &pkg)? {
+                        out.push((s, code));
+                    }
+                }
+                Ok(out)
+            });
+            async move {
+                let found = found.await?;
+                remember_names(found.iter().map(|(s, _)| s));
+                Ok(found)
+            }
+        },
+    )
+}
+
+/// The display names of the apps the lists have shown, by route key: what a pushed detail
+/// page's nav bar reads, synchronously, for its title.
+#[derive(Clone, Default)]
+struct Names(std::rc::Rc<RefCell<HashMap<String, String>>>);
+
+impl Ambient for Names {
+    fn create() -> Self {
+        Names::default()
     }
 }
 
-pub fn search_apps() -> Vec<AppSummary> {
-    let q = query().get();
-    let cat = category().get();
-    let repo = repo_filter().get();
-    let sort = sort_order().get();
-    let excluded = crate::settings::excluded_anti_features();
-    // The device locale drives the "Name" collation; cached, so this is cheap.
-    let locale = platform::device_locale();
-    with_db(|conn| {
-        db::search(
-            conn,
-            &q,
-            cat.as_deref(),
-            repo,
-            &excluded,
-            sort,
-            &locale,
-            500,
-        )
-        .unwrap_or_default()
-    })
+fn remember_names<'a>(apps: impl IntoIterator<Item = &'a AppSummary>) {
+    let names = Names::app();
+    let mut names = names.0.borrow_mut();
+    for a in apps {
+        names.insert(catalog::app_key(a.repo_id, &a.pkg), a.name.clone());
+    }
+}
+
+/// The name a list showed for this app, if one did.
+pub fn app_name(repo_id: u64, pkg: &str) -> Option<String> {
+    Names::app()
+        .0
+        .borrow()
+        .get(&catalog::app_key(repo_id, pkg))
+        .cloned()
 }
 
 /// The installed-package list tagged with the install generation it was enumerated at.
@@ -252,13 +329,6 @@ impl Ambient for InstalledPkgs {
     }
 }
 
-impl InstalledPkgs {
-    /// The same shape the `thread_local!` accessor had, so every call site below reads the same.
-    fn with<R>(f: impl FnOnce(&RefCell<InstalledPkgsCache>) -> R) -> R {
-        f(&InstalledPkgs::app().0)
-    }
-}
-
 /// Bumps only when the set of installed packages can have changed (an install or uninstall). The
 /// package enumeration is cached against it so frequent *catalog* bumps (every sync) don't re-run
 /// the JNI call.
@@ -270,43 +340,17 @@ pub fn bump_installed() {
 }
 
 /// The on-device installed packages (pkg, versionCode), enumerated over JNI on the main thread.
-/// Cached against [`INSTALL_GEN`]: this JNI call is slow, and the Updates tab reads it from several
-/// reactive bindings that re-run on every catalog sync — re-enumerating each time stalls the UI
-/// thread. Only an actual install/uninstall invalidates it.
+/// Cached against [`INSTALL_GEN`]: this JNI call is slow, and only an actual install or
+/// uninstall invalidates it.
 fn cached_installed_packages() -> Vec<(String, i64)> {
     let generation = INSTALL_GEN.load(Ordering::Relaxed);
-    if let Some(cached) = InstalledPkgs::with(|cell| {
-        cell.borrow()
-            .as_ref()
-            .filter(|(g, _)| *g == generation)
-            .map(|(_, v)| v.clone())
-    }) {
-        return cached;
+    let cache = InstalledPkgs::app();
+    if let Some((_, v)) = cache.0.borrow().as_ref().filter(|(g, _)| *g == generation) {
+        return v.clone();
     }
     let installed = platform::installed_packages();
-    InstalledPkgs::with(|cell| *cell.borrow_mut() = Some((generation, installed.clone())));
+    *cache.0.borrow_mut() = Some((generation, installed.clone()));
     installed
-}
-
-/// Installed user apps that are also in the catalog, paired with the on-device versionCode. The
-/// slow package enumeration is cached (see [`cached_installed_packages`]); the per-package catalog
-/// lookups are cheap (indexed by pkg) and run each call so a sync's newer versions show up.
-pub fn installed_updates() -> Vec<(AppSummary, i64)> {
-    let installed = cached_installed_packages();
-    with_db(|conn| {
-        installed
-            .into_iter()
-            .filter_map(|(pkg, code)| db::summary_by_pkg(conn, &pkg).map(|s| (s, code)))
-            .collect()
-    })
-}
-
-pub fn all_categories() -> Vec<Category> {
-    with_db(|conn| db::categories(conn).unwrap_or_default())
-}
-
-pub fn repos() -> Vec<RepoRow> {
-    with_db(|conn| db::repos(conn).unwrap_or_default())
 }
 
 // --- cross-thread pushes -----------------------------------------------------
@@ -368,7 +412,7 @@ fn start_next_update() -> bool {
 }
 
 /// Record the app being installed and the APK staged for it (for result labelling + cleanup).
-pub fn set_in_flight(pkg: &str, name: &str, repo_id: i64, apk_path: &Path) {
+pub fn set_in_flight(pkg: &str, name: &str, repo_id: u64, apk_path: &Path) {
     *IN_FLIGHT.lock().unwrap() = Some(InFlight {
         pkg: pkg.to_string(),
         name: name.to_string(),
@@ -420,14 +464,14 @@ pub fn on_native_install_status(status: i32, message: Option<String>) {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        if !pkg.is_empty() {
-            with_db(|conn| {
-                let _ = db::record_install(conn, &pkg, repo_id, now);
-            });
-        }
         // The installed set changed — invalidate the package cache so Updates/detail re-read it.
         bump_installed();
-        bump_catalog();
+        if pkg.is_empty() {
+            bump_catalog();
+        } else {
+            let pkg = pkg.clone();
+            write(move |db| catalog::record_install(db, &pkg, repo_id, now));
+        }
     }
     set_install(Some(InstallUi {
         pkg,

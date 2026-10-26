@@ -4,13 +4,11 @@
 
 use day::prelude::*;
 
+use crate::detail::DANGER;
 use crate::state::{self, InstallPhase};
+use crate::ui::ACCENT;
 
 const SCRIM: Color = Color::rgba(0.0, 0.0, 0.0, 0.5);
-const CARD: Color = Color::hex(0xFF_FF_FF);
-const INK: Color = Color::hex(0x15_15_17);
-const MUTED: Color = Color::hex(0x6B_6B_70);
-const ACCENT: Color = Color::hex(0x2F_6F_DE);
 
 fn human(bytes: u64) -> String {
     let mb = bytes as f64 / 1_048_576.0;
@@ -25,9 +23,7 @@ fn human(bytes: u64) -> String {
 pub fn install_sheet() -> impl Piece {
     let install = state::install_signal();
 
-    let title = label(move || install.get().map(|u| u.name).unwrap_or_default())
-        .font(Font::Title)
-        .color(INK);
+    let title = label(move || install.get().map(|u| u.name).unwrap_or_default()).font(Font::Title);
 
     let card = column((
         title,
@@ -40,7 +36,7 @@ pub fn install_sheet() -> impl Piece {
                 InstallPhase::Downloading => column((
                     label(crate::res::str::install_downloading())
                         .font(Font::Subheadline)
-                        .color(MUTED),
+                        .secondary(),
                     progress(move || install.get().map(|u| u.progress as f64).unwrap_or(0.0))
                         .id(day::id!(install_progress)),
                     label(move || {
@@ -56,7 +52,7 @@ pub fn install_sheet() -> impl Piece {
                             .unwrap_or_default()
                     })
                     .font(Font::Footnote)
-                    .color(MUTED),
+                    .secondary(),
                     button(crate::res::str::btn_cancel())
                         .action(crate::install::cancel)
                         .id(day::id!(install_cancel)),
@@ -69,10 +65,10 @@ pub fn install_sheet() -> impl Piece {
                     spinner(),
                     label(crate::res::str::install_installing())
                         .font(Font::Subheadline)
-                        .color(MUTED),
+                        .secondary(),
                     label(crate::res::str::install_confirm_hint())
                         .font(Font::Footnote)
-                        .color(MUTED),
+                        .secondary(),
                 ))
                 .spacing(10.0)
                 .align(HAlign::Leading)
@@ -90,7 +86,7 @@ pub fn install_sheet() -> impl Piece {
                 InstallPhase::Cancelled => column((
                     label(crate::res::str::install_cancelled())
                         .font(Font::Headline)
-                        .color(MUTED),
+                        .secondary(),
                     dismiss_button(crate::res::str::btn_close(), false),
                 ))
                 .spacing(10.0)
@@ -99,8 +95,8 @@ pub fn install_sheet() -> impl Piece {
                 InstallPhase::Failed(message) => column((
                     label(crate::res::str::install_failed())
                         .font(Font::Headline)
-                        .color(Color::hex(0xC0_39_2B)),
-                    label(message.clone()).font(Font::Footnote).color(MUTED),
+                        .color(DANGER),
+                    label(message.clone()).font(Font::Footnote).secondary(),
                     dismiss_button(crate::res::str::btn_close(), false),
                 ))
                 .spacing(10.0)
@@ -111,9 +107,8 @@ pub fn install_sheet() -> impl Piece {
     ))
     .spacing(14.0)
     .align(HAlign::Leading)
-    .padding(22.0)
-    .background(CARD)
-    .corner_radius(18.0)
+    .padding(10.0)
+    .card()
     .width(320.0);
 
     // Center the card over a full-bleed dim backdrop.

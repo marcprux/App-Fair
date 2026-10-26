@@ -1,1 +1,0 @@
-Première version publique d'App Fair — parcourez, installez et mettez à jour des applications open source depuis des catalogues compatibles F-Droid.

@@ -1,5 +1,5 @@
-//! Plain data the UI and storage layers share. These are the shapes read out of SQLite and
-//! handed to the pages — deliberately flat and `Clone`, never the raw index JSON.
+//! Plain data the UI and storage layers share: the owned values the catalog worker hands back
+//! to the pages (`crate::catalog`), deliberately flat and `Clone`, never the raw index JSON.
 
 // These structs mirror the full catalog record; a few fields (APK hash, min-SDK, timestamps) are
 // stored for features not yet surfaced in the MVP UI — hash verification, compatibility gating,
@@ -7,9 +7,9 @@
 #![allow(dead_code)]
 
 /// One row in the browse/search list: enough to draw a list cell without touching the detail data.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AppSummary {
-    pub repo_id: i64,
+    pub repo_id: u64,
     /// Android application id, e.g. `org.fdroid.fdroid`.
     pub pkg: String,
     pub name: String,
@@ -35,9 +35,9 @@ impl AppSummary {
 }
 
 /// The detail page's data: everything the store shows about one app.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AppDetail {
-    pub repo_id: i64,
+    pub repo_id: u64,
     pub pkg: String,
     pub name: String,
     pub summary: String,
@@ -50,6 +50,8 @@ pub struct AppDetail {
     pub source_code: String,
     pub icon_path: String,
     pub repo_address: String,
+    /// The catalog's mirror base URLs, the APK download's failover (#12).
+    pub repo_mirrors: Vec<String>,
     /// Repo-relative screenshot paths.
     pub screenshots: Vec<String>,
     pub version_name: String,
@@ -92,7 +94,7 @@ impl AppDetail {
 }
 
 /// A localized anti-feature label, resolved from the repo's `antiFeatures` table.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AntiFeature {
     pub key: String,
     pub name: String,
@@ -100,9 +102,9 @@ pub struct AntiFeature {
 }
 
 /// A configured repository row.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RepoRow {
-    pub id: i64,
+    pub id: u64,
     /// Base address without the index filename, e.g. `https://f-droid.org/repo`.
     pub address: String,
     pub name: String,
@@ -117,7 +119,7 @@ pub struct RepoRow {
 }
 
 /// A category, resolved to its localized name.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Category {
     pub key: String,
     pub name: String,

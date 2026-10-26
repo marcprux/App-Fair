@@ -62,8 +62,7 @@ pub fn prune_stale_apks() {
 /// Begin downloading and installing `app`.
 pub fn start(app: &AppDetail) {
     // Failover targets for the APK: the app's repo first, then its mirrors (#12).
-    let mirrors = state::with_db(|conn| crate::db::repo_mirrors(conn, app.repo_id));
-    let bases = net::bases(&app.repo_address, &mirrors);
+    let bases = net::bases(&app.repo_address, &app.repo_mirrors);
     let apk_path = app.apk_path.clone();
     let total = app.apk_size.max(0) as u64;
     let pkg = app.pkg.clone();
@@ -72,7 +71,8 @@ pub fn start(app: &AppDetail) {
     } else {
         app.name.clone()
     };
-    let apk_file = state::db_path().with_file_name(format!("{}-{}.apk", app.pkg, app.version_code));
+    let apk_file =
+        crate::platform::data_dir().join(format!("{}-{}.apk", app.pkg, app.version_code));
     // The catalog's SHA-256 for this APK (lowercase hex), verified after download.
     let expected_sha = app.apk_sha256.trim().to_ascii_lowercase();
     // The catalog's pinned signing-cert SHA-256, verified against the APK's actual signer (#3).

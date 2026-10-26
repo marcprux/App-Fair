@@ -1,12 +1,12 @@
 //! A bundled F-Droid catalog subset for offline, deterministic runs — local testing and CI
 //! screenshot generation without downloading the full ~50 MB index. Gated by the `APP_FAIR_MOCK`
 //! environment variable (the CI passes it through `launch-env`, and it reaches the app as a normal
-//! env var). When it's set, [`crate::lib`]'s `root()` calls [`seed`] to load the embedded
-//! `mock/catalog.json` into the database and pre-warm the icon cache from `mock/icons/`, instead
-//! of syncing over the network — so the walkthrough always shows the same tasteful set of apps.
+//! env var). When it's set, `root()` calls [`seed`] to load the embedded `mock/catalog.json` into
+//! the catalog and pre-warm the icon cache from `mock/icons/`, instead of syncing over the
+//! network — so the walkthrough always shows the same tasteful set of apps.
 
 use crate::fdroid::{self, IndexV2};
-use crate::{db, icons, model, state};
+use crate::{catalog, icons, model, state};
 
 /// The curated catalog (12 well-known, non-controversial F-Droid apps, real metadata), embedded at
 /// build time from a verbatim subset of the F-Droid Index V2.
@@ -106,8 +106,9 @@ pub fn enabled() -> bool {
     std::env::var("APP_FAIR_MOCK").is_ok_and(|v| !v.is_empty() && v != "0")
 }
 
-/// Seed the database and icon cache from the embedded catalog. Runs on the UI thread at launch (a
-/// dozen apps import in a blink); replaces any prior sync for the default repo. Safe to call again.
+/// Seed the catalog and icon cache from the embedded catalog at launch, replacing any prior sync
+/// for the default repo. The icons land on disk before the import commits, so the list's first
+/// rows find them. Safe to call again.
 pub fn seed() {
     let Ok(index) = serde_json::from_str::<IndexV2>(CATALOG) else {
         day::warn!("mock catalog failed to parse");
@@ -116,15 +117,12 @@ pub fn seed() {
     // Follow the UI language (set from `DAY_LOCALE`) so a French run shows French catalog fields
     // where F-Droid has them; `fdroid::pick` falls back to `en-US` otherwise.
     let locale = std::env::var("DAY_LOCALE").unwrap_or_else(|_| "en-US".to_string());
-    let repo_addr = model::split_index_url(state::DEFAULT_INDEX_URL).0;
-    state::with_db(|conn| {
-        if let Ok(repo_id) = db::ensure_repo(conn, &repo_addr) {
-            let _ = db::upsert_index(conn, repo_id, &index, &locale, true);
-            let _ = db::set_meta(conn, "catalog_locale", &locale);
-        }
-    });
+    let repo_addr = model::split_index_url(catalog::DEFAULT_INDEX_URL).0;
     preseed_icons(&index, &repo_addr, &locale);
-    state::bump_catalog();
+    state::write(move |db| {
+        let repo_id = catalog::ensure_repo(db, &repo_addr)?;
+        catalog::upsert_index(db, repo_id, &index, &locale, true).map(|_| ())
+    });
 }
 
 /// Write each app's embedded icon into the on-disk image cache under the exact URL the list will
@@ -172,17 +170,26 @@ mod tests {
     }
 
     #[test]
-    fn mock_catalog_seeds_into_db() {
+    fn mock_catalog_seeds_into_the_catalog() {
         let index: IndexV2 = serde_json::from_str(CATALOG).unwrap();
-        let mut conn = db::open_in_memory();
-        let repo_id = db::ensure_repo(&mut conn, "https://f-droid.org/repo").unwrap();
-        let written = db::upsert_index(&mut conn, repo_id, &index, "en-US", true).unwrap();
+        let db = catalog::open(day_persistence::Sqlite::memory()).unwrap();
+        let repo_addr = model::split_index_url(catalog::DEFAULT_INDEX_URL).0;
+        let repo_id = catalog::ensure_repo(&db, &repo_addr).unwrap();
+        let written = catalog::upsert_index(&db, repo_id, &index, "en-US", true).unwrap();
         assert_eq!(written, index.packages.len());
         // A known app round-trips through the real query path.
-        let wiki = db::detail(&mut conn, repo_id, "org.wikipedia")
+        let wiki = catalog::detail(&db, repo_id, "org.wikipedia")
             .unwrap()
             .unwrap();
         assert_eq!(wiki.name, "Wikipedia");
         assert!(!wiki.signer.is_empty(), "signer parsed from the manifest");
+        // The walkthrough opens Organic Maps by its row key, and expects it in the default
+        // catalog with id 1.
+        assert_eq!(repo_id, 1);
+        assert!(
+            catalog::detail(&db, repo_id, "app.organicmaps")
+                .unwrap()
+                .is_some()
+        );
     }
 }

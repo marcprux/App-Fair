@@ -1,1 +1,0 @@
-First public release of App Fair — browse, install, and update open-source apps from F-Droid-compatible catalogs.

@@ -2,12 +2,13 @@
 name = "app-fair"
 version = "1.0.2"
 edition = "2024"
-# Generates typed resource constants (`res::images::…`, `res::str::…`) from `resource/` on build.
+description = "An open app store for F-Droid-compatible catalogs."
+# Generates typed `res::` constants from `resource/` (see build.rs).
 build = "build.rs"
 
 [features]
-# `mock` lets bare `cargo build` / rust-analyzer compile out of the box; `day build` always passes
-# `--no-default-features --features <backend>`, stripping it.
+# `mock` keeps bare cargo and rust-analyzer compiling; `day build` overrides it with
+# `--no-default-features --features <backend>` (https://daybrite.dev/docs/reference/project-structure).
 default = ["mock"]
 appkit = ["day/appkit"]
 gtk = ["day/gtk"]
@@ -21,31 +22,22 @@ mock = ["day/mock"]
 # rlib for the desktop bin; the mobile pipeline requests the iOS staticlib / Android cdylib via
 # `cargo rustc --crate-type`.
 [lib]
-# A CONSTANT name, not the package's. Every artifact Day stages is named after the LIB target —
-# `libdayapp.a` for the iOS/macOS staticlib, `libdayapp.so` for the Android cdylib, and the
-# `dayapp::` path `src/main.rs` imports — so none of them move when the package is renamed.
-# Renaming this app is a one-line edit to `[package] name` above (DESIGN.md §17.5).
+# A constant lib name: staged artifacts and the `dayapp::` import never move on a package rename.
 name = "dayapp"
 crate-type = ["rlib"]
 
 [dependencies]
-day = { git = "https://github.com/daybrite/day.git" }
-# on_main: marshal JNI calls that need the app classloader back onto the UI thread.
-day-reactive = { git = "https://github.com/daybrite/day.git" }
-# Persistent settings (added repositories, last-sync bookkeeping).
-day-part-preferences = { git = "https://github.com/daybrite/day.git" }
+day = { package = "day-app", version = "0.6", features = ["model"] }
+# Settings and About: native settings pages over typed preferences (src/settings.rs).
+day-piece-settings = "0.6"
+# The on-device catalog: typed models over bundled SQLite, owned by one database worker so
+# catalog imports and queries never run on the UI thread (src/catalog.rs).
+day-persistence = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# On-device catalog. Diesel is the query/schema layer; libsqlite3-sys `bundled` compiles SQLite in
-# so there is one code path on Android and iOS with no platform DB. `diesel_migrations` embeds the
-# versioned schema migrations run at open().
-# `32-column-tables`: the `apps` table has 24 columns (Diesel defaults to 16).
-diesel = { version = "2.2", features = ["sqlite", "32-column-tables"] }
-diesel_migrations = "2.2"
-libsqlite3-sys = { version = "0.30.1", features = ["bundled"] }
 # The platform HTTP stack via day (system proxies, VPN, and TLS on macOS/iOS/Android/Windows;
 # a bundled ureq + rustls fallback only on Linux/OHOS).
-day-part-http = { git = "https://github.com/daybrite/day.git" }
+day-part-http = "0.6"
 # Verify a downloaded APK against the catalog's SHA-256 before handing it to the installer.
 sha2 = "0.10"
 # Locale-aware collation for the "Name" sort order. Pure-Rust ICU4X with CLDR data compiled in, so
@@ -56,7 +48,7 @@ icu_locale_core = "2"
 
 # Reach the app's JVM + Context on Android (with_env / dcall_static) for the install bridge.
 [target.'cfg(target_os = "android")'.dependencies]
-day-platform-android = { git = "https://github.com/daybrite/day.git" }
+day-platform-android = "0.6"
 # Lower background-thread OS priority so the first sync never starves the UI thread.
 libc = "0.2"
 
@@ -73,7 +65,7 @@ permissions = ["android.permission.POST_NOTIFICATIONS"]
 proguard = ["android/proguard-rules.pro"]
 
 [build-dependencies]
-day-build = { git = "https://github.com/daybrite/day.git" }
+day-build = "0.6"
 
 
 [workspace]

@@ -1,5 +1,5 @@
-# App Fair — UI strings (https://daybrite.dev/docs/localization). Add a locale by dropping a
-# sibling folder (e.g. locales/fr/app.ftl) and registering it in src/lib.rs.
+# App Fair — UI strings (https://daybrite.dev/docs/localization). Add a locale with
+# `day localize add <locale>`, which writes a sibling folder such as locales/fr/app.ftl.
 
 app_title = App Fair
 
@@ -95,7 +95,7 @@ install_failed = Install failed
 # Settings tab
 settings_catalogs = Catalogs
 settings_catalogs_blurb = Enable, disable, or remove your F-Droid-compatible catalogs.
-settings_preferences = Preferences
+settings_updates = Updates
 pref_sync_title = Check for updates on launch
 pref_sync_blurb = Sync catalogs each time App Fair opens.
 pref_auto_title = Download updates automatically
@@ -103,12 +103,10 @@ pref_auto_blurb = Fetch available updates in the background; each install still 
 clear_cache_title = Clear image cache
 clear_cache_blurb = Remove cached icons and screenshots.
 clear_cache_done = Cleared.
-btn_clear = Clear
 btn_remove = Remove
 settings_hide = Hide apps with…
+settings_storage = Storage
 settings_hide_blurb = Leave out apps that declare these anti-features when you browse and search.
-settings_about = About
-about_version = App Fair { $version }
 about_blurb = An open app store for F-Droid-compatible catalogs, built with Day.
 about_privacy = App Fair talks only to the catalogs you add. There are no accounts and no analytics — update checks and downloads go straight to those repositories, and nothing about what you browse or install leaves your device.
 repo_row_meta = { $address }  ·  { $count } apps

@@ -1,228 +1,156 @@
-//! The Settings tab: manage catalogs (enable/remove), a launch-sync preference, clear the image
-//! cache, and an About blurb.
+//! Settings: the catalogs App Fair syncs, when it checks for updates, the anti-feature filters,
+//! the image cache, appearance and language, and About. Native settings pages from
+//! day-piece-settings over typed preferences (https://daybrite.dev/docs/how-to/settings).
 
 use day::prelude::*;
+use day_piece_settings::prelude::*;
 
 use crate::model::RepoRow;
-use crate::{db, state};
+use crate::{catalog, res, state};
 
-const MUTED: Color = Color::hex(0x6B_6B_70);
+/// Whether App Fair checks its catalogs for updates each time it opens.
+pub static SYNC_ON_LAUNCH: Pref<bool> = Pref::new("app_fair.sync_on_launch", || true);
 
-const PREF_SYNC_ON_LAUNCH: &str = "af_sync_on_launch";
-const PREF_AUTO_DOWNLOAD: &str = "af_auto_download";
-const PREF_EXCLUDE_ANTI: &str = "af_exclude_anti";
+/// Whether App Fair downloads available updates by itself; each install still asks (#8).
+pub static AUTO_DOWNLOAD: Pref<bool> = Pref::new("app_fair.auto_download", || false);
 
-/// Anti-feature keys the store shows a toggle for, so most users don't want to see them (#13).
-pub const FILTERABLE_ANTI: &[(&str, &str)] = &[
-    ("Ads", "Advertising"),
-    ("Tracking", "Tracks you"),
-    ("NonFreeNet", "Non-free network services"),
-    ("NonFreeAdd", "Non-free add-ons"),
-    ("NonFreeDep", "Non-free dependencies"),
-    ("UpstreamNonFree", "Non-free upstream"),
-    ("NonFreeAssets", "Non-free assets"),
-    ("KnownVuln", "Known vulnerability"),
-    ("NoSourceSince", "No source since"),
+/// The anti-features a user can hide from browsing and search, each with its preference (#13).
+static HIDE: [(&str, Pref<bool>); 9] = [
+    ("Ads", Pref::new("app_fair.hide.ads", || false)),
+    ("Tracking", Pref::new("app_fair.hide.tracking", || false)),
+    (
+        "NonFreeNet",
+        Pref::new("app_fair.hide.non_free_net", || false),
+    ),
+    (
+        "NonFreeAdd",
+        Pref::new("app_fair.hide.non_free_add", || false),
+    ),
+    (
+        "NonFreeDep",
+        Pref::new("app_fair.hide.non_free_dep", || false),
+    ),
+    (
+        "UpstreamNonFree",
+        Pref::new("app_fair.hide.upstream_non_free", || false),
+    ),
+    (
+        "NonFreeAssets",
+        Pref::new("app_fair.hide.non_free_assets", || false),
+    ),
+    ("KnownVuln", Pref::new("app_fair.hide.known_vuln", || false)),
+    (
+        "NoSourceSince",
+        Pref::new("app_fair.hide.no_source_since", || false),
+    ),
 ];
 
-/// Whether App Fair checks catalogs for updates on launch (default on).
-pub fn sync_on_launch() -> bool {
-    day_part_preferences::get(PREF_SYNC_ON_LAUNCH).as_deref() != Some("0")
-}
+const PRIVACY_URL: &str = "https://github.com/marcprux/App-Fair/blob/main/PRIVACY.md";
+const SOURCE_URL: &str = "https://github.com/marcprux/App-Fair";
 
-/// Whether App Fair downloads available updates automatically (still confirms each install). Off by
-/// default (#8).
-pub fn auto_download() -> bool {
-    day_part_preferences::get(PREF_AUTO_DOWNLOAD).as_deref() == Some("1")
-}
-
-/// Anti-feature keys the user chose to hide from browse/search (#13).
+/// The anti-feature keys the user chose to hide. A tracked read: browsing re-queries when a
+/// filter changes.
 pub fn excluded_anti_features() -> Vec<String> {
-    day_part_preferences::get(PREF_EXCLUDE_ANTI)
-        .map(|s| {
-            s.split(',')
-                .filter(|x| !x.is_empty())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default()
+    HIDE.iter()
+        .filter(|(_, pref)| pref.get())
+        .map(|(key, _)| key.to_string())
+        .collect()
 }
 
-fn set_anti_excluded(key: &str, excluded: bool) {
-    let mut keys: Vec<String> = excluded_anti_features();
-    keys.retain(|k| k != key);
-    if excluded {
-        keys.push(key.to_string());
-    }
-    day_part_preferences::set(PREF_EXCLUDE_ANTI, &keys.join(","));
-}
-
-/// The localized display label for a filterable anti-feature key (#16). The `FILTERABLE_ANTI` list
-/// is fixed, so the fallback never fires in practice.
+/// The localized label of a filterable anti-feature (#16).
 fn anti_label(key: &str) -> LocalizedText {
     match key {
-        "Ads" => crate::res::str::af_ads(),
-        "Tracking" => crate::res::str::af_tracking(),
-        "NonFreeNet" => crate::res::str::af_nonfreenet(),
-        "NonFreeAdd" => crate::res::str::af_nonfreeadd(),
-        "NonFreeDep" => crate::res::str::af_nonfreedep(),
-        "UpstreamNonFree" => crate::res::str::af_upstreamnonfree(),
-        "NonFreeAssets" => crate::res::str::af_nonfreeassets(),
-        "KnownVuln" => crate::res::str::af_knownvuln(),
-        "NoSourceSince" => crate::res::str::af_nosourcesince(),
-        _ => day::tr(key),
+        "Ads" => res::str::af_ads(),
+        "Tracking" => res::str::af_tracking(),
+        "NonFreeNet" => res::str::af_nonfreenet(),
+        "NonFreeAdd" => res::str::af_nonfreeadd(),
+        "NonFreeDep" => res::str::af_nonfreedep(),
+        "UpstreamNonFree" => res::str::af_upstreamnonfree(),
+        "NonFreeAssets" => res::str::af_nonfreeassets(),
+        "KnownVuln" => res::str::af_knownvuln(),
+        _ => res::str::af_nosourcesince(),
     }
 }
 
-pub fn settings_page() -> impl Piece {
-    let version = state::catalog_version();
-
-    let repo_list = each(
-        items(
-            move || {
-                version.get();
-                state::repos()
-            },
-            |r: &RepoRow| r.id,
-        ),
-        repo_row,
-    );
-
-    let sync_pref = Signal::new(sync_on_launch());
-    watch(
-        move || sync_pref.get(),
-        move |on: &bool, _| {
-            day_part_preferences::set(PREF_SYNC_ON_LAUNCH, if *on { "1" } else { "0" });
-        },
-    );
-
-    let auto_pref = Signal::new(auto_download());
-    watch(
-        move || auto_pref.get(),
-        move |on: &bool, _| {
-            day_part_preferences::set(PREF_AUTO_DOWNLOAD, if *on { "1" } else { "0" });
-        },
-    );
-
-    // One toggle per filterable anti-feature; flipping one re-filters the browse/search lists.
-    let excluded = excluded_anti_features();
-    let anti_rows: Vec<_> = FILTERABLE_ANTI
-        .iter()
-        .map(|(key, _text)| {
-            let key = *key;
-            let on = Signal::new(excluded.iter().any(|k| k == key));
-            watch(
-                move || on.get(),
-                move |v: &bool, _| {
-                    set_anti_excluded(key, *v);
-                    state::bump_catalog();
-                },
-            );
-            row((
-                label(anti_label(key)).font(Font::Body).grow_w(),
-                toggle(on).id(day::id!(anti, key)),
-            ))
-            .align(VAlign::Center)
-            .spacing(10.0)
-        })
-        .collect();
-
+/// The Settings declaration, installed once in `root()`.
+pub fn preferences() -> Prefs {
     let cleared = Signal::new(false);
-
-    scroll(
-        column((
-            label(crate::res::str::settings_catalogs()).font(Font::Headline),
-            label(crate::res::str::settings_catalogs_blurb())
-                .font(Font::Footnote)
-                .color(MUTED),
-            repo_list,
-            divider(),
-            label(crate::res::str::settings_preferences()).font(Font::Headline),
-            row((
-                column((
-                    label(crate::res::str::pref_sync_title()).font(Font::Body),
-                    label(crate::res::str::pref_sync_blurb())
-                        .font(Font::Footnote)
-                        .color(MUTED),
-                ))
-                .spacing(2.0)
-                .align(HAlign::Leading)
-                .grow_w(),
-                toggle(sync_pref).id(day::id!(pref_sync)),
-            ))
-            .align(VAlign::Center)
-            .spacing(10.0),
-            row((
-                column((
-                    label(crate::res::str::pref_auto_title()).font(Font::Body),
-                    label(crate::res::str::pref_auto_blurb())
-                        .font(Font::Footnote)
-                        .color(MUTED),
-                ))
-                .spacing(2.0)
-                .align(HAlign::Leading)
-                .grow_w(),
-                toggle(auto_pref).id(day::id!(pref_auto_download)),
-            ))
-            .align(VAlign::Center)
-            .spacing(10.0),
-            row((
-                column((
-                    label(crate::res::str::clear_cache_title()).font(Font::Body),
-                    label(move || {
-                        if cleared.get() {
-                            crate::res::str::clear_cache_done().format()
-                        } else {
-                            crate::res::str::clear_cache_blurb().format()
-                        }
-                    })
-                    .font(Font::Footnote)
-                    .color(MUTED),
-                ))
-                .spacing(2.0)
-                .align(HAlign::Leading)
-                .grow_w(),
-                button(crate::res::str::btn_clear())
-                    .action(move || {
-                        let dir = crate::platform::data_dir().join("imgcache");
-                        let _ = std::fs::remove_dir_all(&dir);
+    Preferences::new()
+        .title(res::str::tab_settings())
+        .about(
+            About::from_manifest()
+                .tagline(res::str::about_blurb())
+                .credits(res::str::about_privacy())
+                .source(SOURCE_URL)
+                .privacy(PRIVACY_URL),
+        )
+        .group(
+            Group::new("catalogs", res::str::settings_catalogs())
+                .icon(res::vectors::tab_catalogs)
+                .section(
+                    Section::new()
+                        .footer(res::str::settings_catalogs_blurb())
+                        .row(rows::custom(repo_list)),
+                ),
+        )
+        .group(
+            Group::new("updates", res::str::settings_updates())
+                .icon(res::vectors::tab_updates)
+                .row(
+                    rows::toggle(&SYNC_ON_LAUNCH, res::str::pref_sync_title())
+                        .caption(res::str::pref_sync_blurb())
+                        .id(day::id!(pref_sync)),
+                )
+                .row(
+                    rows::toggle(&AUTO_DOWNLOAD, res::str::pref_auto_title())
+                        .caption(res::str::pref_auto_blurb())
+                        .id(day::id!(pref_auto_download)),
+                ),
+        )
+        .group(
+            Group::new("filters", res::str::settings_hide())
+                .icon(res::vectors::anti_feature)
+                .section(Section::new().footer(res::str::settings_hide_blurb()).rows(
+                    HIDE.iter().map(|(key, pref)| {
+                        rows::toggle(pref, anti_label(key)).id(day::id!(anti, *key))
+                    }),
+                )),
+        )
+        .group(
+            Group::new("storage", res::str::settings_storage())
+                .icon(res::vectors::storage)
+                .row(
+                    rows::action(res::str::clear_cache_title(), move || {
+                        let _ =
+                            std::fs::remove_dir_all(crate::platform::data_dir().join("imgcache"));
                         cleared.set(true);
                     })
+                    .caption(move || {
+                        if cleared.get() {
+                            res::str::clear_cache_done().format()
+                        } else {
+                            res::str::clear_cache_blurb().format()
+                        }
+                    })
                     .id(day::id!(clear_cache)),
-            ))
-            .align(VAlign::Center)
-            .spacing(10.0),
-            divider(),
-            column((
-                label(crate::res::str::settings_hide()).font(Font::Headline),
-                label(crate::res::str::settings_hide_blurb())
-                    .font(Font::Footnote)
-                    .color(MUTED),
-                column(anti_rows).spacing(Space::S).align(HAlign::Leading),
-            ))
-            .spacing(Space::S)
-            .align(HAlign::Leading),
-            divider(),
-            column((
-                label(crate::res::str::settings_about()).font(Font::Headline),
-                label(crate::res::str::about_version(env!("CARGO_PKG_VERSION"))).font(Font::Body),
-                label(crate::res::str::about_blurb())
-                    .font(Font::Footnote)
-                    .color(MUTED),
-                label(crate::res::str::about_privacy())
-                    .font(Font::Footnote)
-                    .color(MUTED),
-            ))
-            .spacing(6.0)
-            .align(HAlign::Leading),
-        ))
-        .spacing(14.0)
-        .align(HAlign::Leading)
-        .padding(Space::L),
-    )
+                ),
+        )
+        .group(general_group(res::locales::ALL))
+        .install()
 }
 
-fn repo_row(slot: ItemSlot<RepoRow, i64>) -> impl Piece {
+/// The catalogs, each with its switch and a Remove button.
+fn repo_list() -> impl Piece {
+    let repos = state::repos();
+    column((each(
+        items(move || repos.get(), |r: &RepoRow| r.id),
+        repo_row,
+    ),))
+    .spacing(Space::S)
+    .align(HAlign::Leading)
+}
+
+fn repo_row(slot: ItemSlot<RepoRow, u64>) -> impl Piece {
     let r = slot.get();
     let id = r.id;
     let address = r.address.clone();
@@ -232,17 +160,14 @@ fn repo_row(slot: ItemSlot<RepoRow, i64>) -> impl Piece {
         move || enabled.get(),
         move |on: &bool, _| {
             let on = *on;
-            state::with_db(|conn| {
-                let _ = db::set_repo_enabled(conn, id, on);
-            });
-            state::bump_catalog();
+            state::write(move |db| catalog::set_repo_enabled(db, id, on));
         },
     );
 
     row((
         column((
-            // Read name/count reactively: the row is keyed by repo id, so `each` reuses it when a
-            // sync/seed fills in the repo's name and app count — a static read would stay stale.
+            // Read name and count reactively: the row is keyed by catalog id, so `each` keeps
+            // it when a sync fills in the catalog's name and app count.
             label(move || {
                 slot.field(|r| {
                     if r.name.is_empty() {
@@ -254,30 +179,26 @@ fn repo_row(slot: ItemSlot<RepoRow, i64>) -> impl Piece {
             })
             .font(Font::Body),
             label(move || {
-                crate::res::str::repo_row_meta(crate::res::str::RepoRowMeta {
+                res::str::repo_row_meta(res::str::RepoRowMeta {
                     address: slot.field(|r| r.address.clone()),
                     count: slot.field(|r| r.app_count),
                 })
                 .format()
             })
             .font(Font::Caption)
-            .color(MUTED),
+            .secondary(),
         ))
         .spacing(2.0)
         .align(HAlign::Leading)
         .grow_w(),
         toggle(enabled).id(day::id!(repo_enabled, id)),
-        button(crate::res::str::btn_remove())
+        button(res::str::btn_remove())
             .action(move || {
-                state::with_db(|conn| {
-                    let _ = db::delete_repo(conn, id);
-                });
                 crate::cache::remove_index(&address);
-                state::bump_catalog();
+                state::write(move |db| catalog::delete_repo(db, id));
             })
             .id(day::id!(repo_remove, id)),
     ))
     .spacing(10.0)
     .align(VAlign::Center)
-    .padding(Insets::symmetric(0.0, 6.0))
 }

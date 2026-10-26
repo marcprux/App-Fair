@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright © The Daybrite Project
+     SPDX-License-Identifier: MPL-2.0 -->
+<!-- App Fair's blue palette in the dark scheme: the Material 3 tones 80/20/30/90 of the same
+     primary and secondary hues as values/colors.xml, so the accent stays readable on dark grounds. -->
+<resources>
+    <color name="af_primary">#B0C6FF</color>
+    <color name="af_on_primary">#002D6E</color>
+    <color name="af_primary_container">#00429B</color>
+    <color name="af_on_primary_container">#D9E2FF</color>
+    <color name="af_secondary">#BDC7DC</color>
+    <color name="af_on_secondary">#273141</color>
+    <color name="af_secondary_container">#3E4759</color>
+    <color name="af_on_secondary_container">#D9E3F8</color>
+</resources>

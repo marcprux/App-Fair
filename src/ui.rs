@@ -6,21 +6,24 @@ use day::async_image::ContentMode;
 use day::prelude::*;
 use day::searchfield::search_field;
 
-use crate::model::{AppSummary, SortOrder};
+use crate::model::{AppSummary, Category, RepoRow, SortOrder};
 use crate::state::{self, SyncUi};
-use crate::{Nav, push_nav, sync};
+use crate::{Nav, catalog, push_nav, sync};
 
-const MUTED: Color = Color::hex(0x6B_6B_70);
-const PLACEHOLDER: Color = Color::hex(0xE3_E3_E8);
-const ACCENT: Color = Color::hex(0x2F_6F_DE);
+/// The empty icon square while an icon loads: a mid grey that reads on light and dark rows.
+pub(crate) const PLACEHOLDER: Color = Color::rgba(0.5, 0.5, 0.55, 0.18);
+/// App Fair's blue, which holds its contrast on light and dark grounds.
+pub(crate) const ACCENT: Color = Color::hex(0x3D_7B_F0);
 
 pub fn catalogs_page(path: Signal<Vec<Nav>>) -> impl Piece {
     let query = state::query();
     let category = state::category();
     let sort = state::sort_order();
-    let version = state::catalog_version();
+    let repos = state::repos();
+    let categories = state::categories();
+    let apps = state::search_results();
 
-    let switcher = keyed(move || Some(version.get()), move |_| catalog_switcher());
+    let switcher = keyed(move || Some(repos.get()), |repos| catalog_switcher(repos));
     // Adding a custom F-Droid catalog is still a beta feature — the "Add" button is exposed only in
     // debug builds; release builds hide it and browse the default App Fair catalog alone.
     let header = row((
@@ -42,41 +45,34 @@ pub fn catalogs_page(path: Signal<Vec<Nav>>) -> impl Piece {
         .id(day::id!(search));
 
     let category_region = keyed(
-        move || Some(version.get()),
-        move |_| category_picker(category),
+        move || Some(categories.get()),
+        move |cats| category_picker(cats, category),
     );
     // The category filter (which grows to fill) and the sort-order drop-down share one row.
     let controls = row((category_region.grow_w(), sort_picker(sort)))
         .spacing(Space::S)
         .align(VAlign::Center);
 
-    let sync_line = label(move || sync_text(&state::sync_signal().get()))
+    let sync = state::sync_signal();
+    let sync_line = label(move || sync_text(&sync.get()))
         .font(Font::Footnote)
-        .color(MUTED)
+        .secondary()
         .id(day::id!(sync_status));
 
     let list = list(
         items(
-            move || {
-                version.get();
-                query.get();
-                category.get();
-                state::repo_filter().get();
-                state::search_apps()
-            },
-            |a: &AppSummary| format!("{}~{}", a.repo_id, a.pkg),
+            move || apps.get(),
+            |a: &AppSummary| catalog::app_key(a.repo_id, &a.pkg),
         ),
         app_row,
     )
     .row_height(RowHeight::Uniform(72.0))
     .on_select(move |key: String| {
-        if let Some((rid, pkg)) = key.split_once('~')
-            && let Ok(rid) = rid.parse::<i64>()
-        {
+        if let Some((repo_id, pkg)) = catalog::parse_app_key(&key) {
             push_nav(
                 path,
                 Nav::App {
-                    repo_id: rid,
+                    repo_id,
                     pkg: pkg.to_string(),
                 },
             );
@@ -107,10 +103,10 @@ fn sort_picker(sort: Signal<SortOrder>) -> impl Piece {
 }
 
 /// A native dropdown of "All Catalogs" + each enabled catalog. Selecting one filters the list.
-fn catalog_switcher() -> impl Piece {
-    let enabled: Vec<_> = state::repos().into_iter().filter(|r| r.enabled).collect();
+fn catalog_switcher(repos: &[RepoRow]) -> impl Piece + use<> {
+    let enabled: Vec<_> = repos.iter().filter(|r| r.enabled).collect();
 
-    let options: Vec<(Option<i64>, LocalizedText)> =
+    let options: Vec<(Option<u64>, LocalizedText)> =
         std::iter::once((None, crate::res::str::all_catalogs()))
             .chain(enabled.iter().map(|r| {
                 let name = if r.name.is_empty() {
@@ -133,8 +129,7 @@ fn catalog_switcher() -> impl Piece {
 
 /// A native dropdown of "All" + every category. Selecting one filters the list. Nothing until the
 /// catalog has categories.
-fn category_picker(category: Signal<Option<String>>) -> impl Piece {
-    let cats = state::all_categories();
+fn category_picker(cats: &[Category], category: Signal<Option<String>>) -> impl Piece + use<> {
     (!cats.is_empty()).then(|| {
         // Category names come from the catalog as plain strings, so the "All" entry joins them
         // as one.
@@ -160,10 +155,14 @@ pub(crate) fn app_row(slot: ItemSlot<AppSummary, String>) -> impl Piece {
     row((
         icon,
         column((
-            label(move || slot.field(|a| a.name.clone())).font(Font::Body),
+            label(move || slot.field(|a| a.name.clone()))
+                .font(Font::Body)
+                .max_lines(1),
             label(move || slot.field(|a| a.summary.clone()))
                 .font(Font::Footnote)
-                .color(MUTED),
+                .secondary()
+                // The rows are a uniform height: two lines of summary is what fits.
+                .max_lines(2),
         ))
         .spacing(2.0)
         .align(HAlign::Leading)

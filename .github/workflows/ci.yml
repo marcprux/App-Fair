@@ -1,28 +1,41 @@
+# Build, test, package, and release App Fair with the reusable workflow every Day app uses
+# (daybrite/actions).
 name: ci
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  pull_request:
+  # Nightly, against the newest day release: what someone who builds this gets.
+  schedule:
+    - cron: "0 7 * * *"
   workflow_dispatch:
-
+    inputs:
+      day-main:
+        description: Build against day's main branch instead of the newest release
+        type: boolean
+        default: false
 # The repository's own jobs run this checkout's code with a read-only token. The write grants
-# sit on the job that calls the shared workflow, whose release and Pages jobs alone use them;
-# its build legs, which run this code too, narrow their token to read-only themselves.
+# sit on the job that calls the shared workflow, whose release jobs alone use them; its build
+# legs, which run this code too, narrow their token to read-only themselves.
 permissions:
   contents: read
 
 jobs:
   app:
-    uses: daybrite/actions/.github/workflows/dayapp.yml@main
+    uses: daybrite/actions/.github/workflows/dayapp.yml@v1
     permissions:
-      contents: write # release-asset upload on tag builds
+      contents: write # release assets on tags
     secrets: inherit
     with:
-      targets: android-material
-      day-version: main
-      # The walkthrough runs against the bundled mock catalog (APP_FAIR_MOCK=1) so screenshots are
-      # deterministic and offline — no 50 MB F-Droid index download in CI.
-      scripts: dayscript/ci.yaml
+      targets: android-material, ios-uikit
+      preflight-checks: fmt, clippy, test
+      # Day's main on a push, the newest release nightly, resolved once per run so every leg
+      # compiles the same one (the lock is not committed; see .gitignore).
+      day-deps: ${{ inputs.day-main && 'main' || 'auto' }}
+      scripts: dayscript/walkthrough.yaml
+      # The walkthrough runs against the bundled offline catalog, so its screenshots are
+      # deterministic and no 50 MB F-Droid index downloads in CI.
       launch-env: APP_FAIR_MOCK=1
       locales: en fr
